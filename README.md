@@ -21,12 +21,12 @@ GPU 用开源的 Panfrost/Mesa，不再依赖厂商内核和闭源 libmali。
 | 屏幕 2160×1440 eDP | 可用 | 60 Hz，关屏时整条显示链断电，硬件光标，背光 |
 | GPU Mali-G76 MC16 | 可用 | Panfrost，OpenGL ES 3.1 / OpenGL 3.1（Mesa 26.1） |
 | 声卡 Hi6405 + 2×TAS2562 | 可用 | 扬声器、耳机、内置麦克风 |
-| 键盘、触控板、F 行热键、电池、合盖 | 可用 | |
-| 睡眠 | s2idle 可用 | deep 唤醒会变成冷启动，默认不用 |
-| 硬件视频解码 | 可用 | H.264、HEVC（含 10 bit）、VP9、VP8、MPEG-2；GStreamer 自动使用，Chromium 由 `system/install.sh video` 打开 |
-| DP/HDMI 输出、指纹、硬件视频编码 | 不支持 | |
+| 键盘、触控板、F 行热键、电池、合盖 | 可用 | 内置键盘与合盖传感器支持 s2idle 唤醒（拼图 0 已完成） |
+| 睡眠 | s2idle 可用 | 按键或开盖即刻唤醒；deep 唤醒会变成冷启动，默认不用 |
+| 硬件视频编解码 | 可用 | 解码支持 H.264/HEVC/VP9/VP8/MPEG-2；编码支持 `hisi-venc`（H.264/HEVC V4L2 M2M，拼图 1 已完成） |
+| DP/HDMI 外接显示、指纹、Vulkan | 攻坚与规划中 | 详见 [硬件拼图路线图](docs/puzzles-roadmap.md) |
 
-各部件的细节在 [docs/hardware/](docs/hardware/)，已知问题见 [docs/known-issues.md](docs/known-issues.md)。
+各部件的细节在 [docs/hardware/](docs/hardware/)，硬件补完计划见 [docs/puzzles-roadmap.md](docs/puzzles-roadmap.md)，已知问题见 [docs/known-issues.md](docs/known-issues.md)。
 
 ## 在一台新的 L410 上安装
 
@@ -77,6 +77,7 @@ sudo bash l410-mainline/tests/quick.sh
 - [docs/kernel.md](docs/kernel.md)：内核源码结构、构建、启动参数、出问题时怎么取日志
 - [docs/kernel-config.md](docs/kernel-config.md)：内核配置片段
 - [docs/hardware/](docs/hardware/)：SoC 时钟与核间通信、电源与温控、UFS、USB、PCIe、WiFi/蓝牙、音频、显示与 GPU、视频解码、笔记本外设、睡眠
+- [docs/puzzles-roadmap.md](docs/puzzles-roadmap.md)：硬件补完路线图（5 大硬件拼图规划与当前进展）
 - [docs/tuning/](docs/tuning/)：电源模式与性能、桌面帧延迟、sched_ext、内存、应用启动速度、触控板滚动、桌面
 - [docs/testing/](docs/testing/)：自检套件、测试计划、最近一次回归结果
 
