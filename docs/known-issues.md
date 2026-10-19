@@ -8,7 +8,7 @@
 |---|---|
 | DP / HDMI 输出 | 没有移植。厂商的 DP 控制器驱动约 6000 行，外加 PS176（DP 转 HDMI）；DP 音频也就没有 |
 | 指纹 | 传感器挂在 TEE 后面，需要厂商的 tzdriver（约 1.7 万行）和用户态 teecd、HAL，没有做 |
-| 硬件视频编码 | 两个 VENC 和 JPEG 单元没有做，只做了解码（[hardware/vcodec.md](hardware/vcodec.md)） |
+| 硬件视频编码 | hisi-venc 驱动已实现 H.264/HEVC 状态式硬件编码（[hardware/vcodec.md](hardware/vcodec.md)） |
 | Vulkan | Mesa 的 panvk 对 Bifrost（G76）还是实验性的，没有测试 |
 | 风扇转速 | 风扇完全由 EC 根据板上热敏电阻控制，厂商系统里也没有驱动，读不到转速 |
 | KVM | 固件只给 EL1，没有 EL2，不能用虚拟化 |

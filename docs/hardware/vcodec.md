@@ -18,7 +18,28 @@
 | VP8 | VP8-TEST-VECTORS 61/61 |
 | MPEG-2 主档次 | ISO 13818-4 的 38 个 MPEG-2 流和 ffmpeg 比，37 个在 IDCT 误差内一致；teracom_vlc4 最后一帧有 4 行宏块不同。另外 5 个 MPEG-1 流不在 V4L2 接口的范围内 |
 
-VC-1、MPEG-4、AVS、AV1 没做，编码也没做。
+VC-1、MPEG-4、AVS、AV1 没做。
+
+## 视频硬件编码（hisi-venc）
+
+内核驱动 `hisi-venc`（`drivers/media/platform/hisilicon/venc/`）为麒麟 990 的 VEDU 编码单元实现了标准的 V4L2 mem2mem 状态式编码器：
+
+- **编码格式**：H.264（`V4L2_PIX_FMT_H264`，Baseline/Main/High）与 HEVC（`V4L2_PIX_FMT_HEVC`，Main Profile）。
+- **输入格式**：线性 NV12（`V4L2_PIX_FMT_NV12`）。
+- **帧头生成**：关键帧自动封装 Annex-B 规格的 SPS/PPS（H.264）与 VPS/SPS/PPS（HEVC），兼容任何标准播放器与封装器。
+- **内存与 SMMU**：使用与 VDH 解码器同构的私有 SMMU（ARM 32-bit LPAE 页表，`io-pgtable`），支持 DMA-SG 零拷贝与缓冲区重构。
+- **时钟与电源**：支持 DVFS（640 / 480 / 332 / 207.5 MHz）与运行期电源管理（`pm_runtime`，空闲 200 ms 自动休眠）。
+- **配置片段**：`l410/configs/86-venc.config`（`CONFIG_VIDEO_HISI_VENC=m`）。
+
+### 用户态使用
+
+驱动注册为 `/dev/video*`（`VFL_DIR_M2M`），用户态工具开箱即用：
+
+| 工具 | 调用方式 | 说明 |
+|---|---|---|
+| FFmpeg | `ffmpeg -i in.mp4 -c:v h264_v4l2m2m -b:v 4M out.mp4` | 原生支持，亦可使用 `hevc_v4l2m2m` |
+| GStreamer | `gst-launch-1.0 videotestsrc ! v4l2h264enc extra-controls="controls,video_bitrate=4000000" ! mp4mux ! filesink location=out.mp4` | 自动匹配 `v4l2h264enc` 与 `v4l2h265enc` |
+| OBS Studio | 编码器选择 `V4L2 mem2mem` | 屏幕录制与直播推流硬件加速 |
 
 Chromium 播 4K30 时，CPU 占用和软解相比：H.264 约 1/3，VP9 约 1/5。Chromium 没有 HEVC 软解，HEVC 只能靠硬解。
 解码器时钟默认 332 MHz，模块参数 `hisi_vdec.clk_level`：0 = 480 MHz，1 = 332 MHz，2 = 277 MHz，3 = 185 MHz。
