@@ -4,7 +4,7 @@ L410 的内屏是一块 2160×1440 的 eDP 面板，信号路径是 Kirin 990 �
 GPU 是 Mali-G76 MC16，用主线的 Panfrost 内核驱动和 Mesa，不需要厂商的 DSS 驱动和闭源 libmali。
 
 显示驱动 `kirin990-dss` 是新写的：开机时接管 UEFI 已经点亮的管线，关屏时按厂商的顺序把整条链断电，开屏时从复位重建。
-DP/HDMI 输出没有做。
+外接 DP/HDMI 视频输出由新实现的 `kirin990_dp.c` 支持（DWC DP TX + RTD2172 桥片 + EC 供电）。
 
 ## 一览
 
@@ -13,6 +13,8 @@ DP/HDMI 输出没有做。
 | 显示控制器 | DSS v510，扫描输出经叠加层 OV0 | `drivers/gpu/drm/hisilicon/kirin990/`（模块 `kirin990_drm`，DRM 驱动名 `kirin`） |
 | DSI | DSI0，4 lane，每 lane 1248 Mbps | `kirin990_dsi.c` |
 | eDP 桥 | SN65DSI86（I2C 控制器 fa04d000 上的 0x2c），eDP 4 lane RBR | `kirin990_edp.c` |
+| DP / HDMI 输出 | Synopsys DesignWare Cores DP TX (`0xf8500000`) + Realtek RTD2172 (I2C4 `0x35`) | `kirin990_dp.c` |
+| HDMI 供电与 HPD | EC 控制 LDO2 (0x53/0x52) 与 LDO4 (0x57/0x56) + HPD GPIO 282 | `huawei-echub.c`、`60-graphics.dtsi` |
 | 电源时序 | DSS 电源域和时钟、桥和面板供电 | `kirin990_power.c` |
 | 背光 | SoC 的 BLPWM 输出（GPIO_161）+ 使能 GPIO_027 | `drivers/pwm/pwm-hisi-blpwm.c` + 主线 `pwm-backlight` |
 | GPU | Mali-G76，16 核，GPU ID 0x7211 | `drivers/gpu/drm/panfrost/` |
@@ -147,6 +149,29 @@ Plasma 下移动光标、换形状、隐藏、拖窗口、反复最大化都没�
 ### 为什么不用主线的桥和面板驱动
 
 主线有 `ti-sn65dsi86`、`panel-edp`、`dw-mipi-dsi`，这里没有用：厂商的上电时序和几个板级修正（DSI EQ、训练后的 TX 摆幅）直接照搬更稳。
+
+### 外接显示（DP / HDMI 输出）
+
+L410 的机身 HDMI 外部显示接口基于麒麟 990 的二级显示管线（Secondary Display Pipe, SDP）构建，驱动模块为 `kirin990_dp.c`。
+
+#### 1. 硬件拓扑与控制器
+- **DP 控制器**：SoC 内置 Synopsys DesignWare Cores DisplayPort Transmitter (DWC DP TX v2.10*，MMIO `0xf8500000`，硬件 ID `0x900116c3`)。
+- **Combo PHY**：USB 3.1 / DP 组合 PHY (`0xf8481000`)，在 `phy-kirin990-usb3.c` 中配置为 `TCA_MUX_USB_DP2` 模式，保留 2 条差分 Lane 专用于 DP 视频流（2 lanes @ 2.7 Gbps HBR）。
+- **DP 转 HDMI 桥片**：主板焊接 Realtek RTD2172 桥片（I2C 地址 `0x35`，挂载于 I2C4 `0xfa04d000`），实现 DP 1.2 到 HDMI 2.0 的物理转换。
+
+#### 2. EC 供电管理
+RTD2172 桥片与 HDMI 5V 外部供电并不通过 SoC GPIO 直接控制，而是由主板嵌入式控制器 (EC `huawei-echub`) 内部的 LDO 统一调度：
+- `EC_HDMI_VDD_ON` (LDO2)：向 EC 寄存器 `0x02b2` 发送 `0x53` 开电，发送 `0x52` 断电。
+- `EC_1V1_EN` (LDO4)：向 EC 寄存器 `0x02b2` 发送 `0x57` 开电，发送 `0x56` 断电。
+在 `huawei-echub.c` 中导出了 `huawei_echub_hdmi_power(bool enable)` 供 DRM 驱动按正确时序控制桥片上下电。
+
+#### 3. 时钟拓扑与像素 PLL
+- 控制器辅助时钟：16 MHz AUX 时钟 `clk_dpctrl_16m`、APB 寄存器接口时钟 `pclk_dpctrl`、AXI 数据总线时钟 `aclk_dpctrl`、以及 SDP 像素输出时钟 `clk_ldi1`。
+- 像素时钟 PLL：由 `PERI_CRG` 中的 `PPLL7` 提供（基址 `0xfff05000 + 0x530/0x534`）。驱动采用从固件反汇编提取的 22 组精选分频表，精确适配不同分辨率所需像素时钟（例如 1080p@60Hz 148.5 MHz），并将 VCO 始终约束在最佳工作区间 [800 MHz, 1600 MHz]。
+
+#### 4. 热插拔检测与 EDID 协商
+- 热插拔检测 (HPD) 挂载在 SoC GPIO 282（`fa8b7000.gpio` 引脚 2）。
+- 插入 HDMI 线缆后，GPIO 中断启动 50 ms 硬件消抖工作队列，经 DWC DP TX 的 AUX 通道（I2C-over-AUX）向 RTD2172 和外接显示器发起 DDC 读取，动态注册 DRM 模式并向 Wayland 合成器（KWin/Sway）发送 HPD 热插拔事件。
 
 ## GPU
 
@@ -302,9 +327,9 @@ bash tests/display-power.sh 3 60     # 3 轮关屏/开屏，每次测功耗 60 s
 
 ## 没有做
 
-- DP/HDMI：厂商的 DP 控制器驱动（hidpc，约 6000 行）、USB-C combo PHY 的 DP 部分（`hisi_usb_dp_ctrl`）、PS176（I2C4 的 0x48）都没有移植，DP 音频也没有。
+- DP/HDMI 视频输出已在 v6.18 中由 `kirin990_dp.c` 原生实现（DWC DP TX + RTD2172 桥片），HDMI/DP 音频暂未接入 ALSA。
 - overlay 平面。
-- Vulkan、硬件视频编码（解码见 [vcodec.md](vcodec.md)）。
+- Vulkan（详见硬件拼图规划）。硬件视频编解码见 [vcodec.md](vcodec.md)。
 
 ## 试过但没用
 

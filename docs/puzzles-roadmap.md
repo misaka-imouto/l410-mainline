@@ -21,7 +21,7 @@ flowchart TD
     subgraph Puzzles["5 大硬件拼图工程"]
         P0["【拼图 0】键盘/合盖 s2idle 唤醒\n状态: ✅ 已完成"]
         P1["【拼图 1】视频硬件编码 hisi-venc\n状态: ✅ 已完成"]
-        P2["【拼图 2】外接显示输出 (DP/HDMI)\n状态: 🚀 攻坚中"]
+        P2["【拼图 2】外接显示输出 (DP/HDMI)\n状态: ✅ 已完成"]
         P3["【拼图 3】Mesa Panfrost Vulkan (panvk)\n状态: 📋 规划中"]
         P4["【拼图 4】电源键指纹识别 (TEE/fprintd)\n状态: 📋 规划中"]
     end
@@ -47,7 +47,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- | :---: | :--- |
 | **拼图 0** | **键盘与合盖睡眠唤醒** | EC 矩阵键盘、Lid 霍尔开关、GPIO 唤醒源 | `09-laptop.dtsi` 设备树修补 (`wakeup-source`) | **✅ 已完成** | 解决挂起后无法按键或开盖唤醒，合盖即睡、开盖即醒 |
 | **拼图 1** | **视频硬件编码器** | VCodec V500 VEDU (`0xe9280000`)、私有 SMMU | `hisi-venc` V4L2 stateful mem2mem 驱动 | **✅ 已完成** | FFmpeg、GStreamer、OBS 硬件录屏推流与视频转码，CPU 占用由 100% 降至 5% |
-| **拼图 2** | **外接显示输出** | DSS DP TX 控制器、Parade PS176 (DP 转 HDMI) | Kirin DSS DP DRM 控制器与 Bridge 驱动 | **🚀 攻坚中** | 激活 Type-C DP 与 HDMI 物理接口，实现双屏/多屏扩展桌面与音画同步 |
+| **拼图 2** | **外接显示输出** | Synopsys DWC DP TX (`0xf8500000`)、Realtek RTD2172 (`0x35`)、EC 供电 | `kirin990_dp.c` DRM KMS 驱动 | **✅ 已完成** | 激活机身 HDMI 与 Type-C DP 物理接口，实现双屏/多屏扩展桌面与音画同步 |
 | **拼图 3** | **Panfrost Vulkan 支持** | Mali-G76 MC16 (Bifrost 架构) | Mesa 开源 `panvk` 驱动 (Bifrost 编译器后端) | **📋 规划中** | 支持 DXVK/VKD3D 游戏转译，为 Wayland 合成器提供低开销渲染通道 |
 | **拼图 4** | **电源键指纹识别** | 电源键指纹模组、TrustZone / iTrustee | Linux OP-TEE 客户端驱动 + `libfprint` 驱动 | **📋 规划中** | 实现锁屏解锁、Sudo 权限认证的生物识别秒级体验 |
 
@@ -118,36 +118,42 @@ linux-l410/drivers/media/platform/hisilicon/venc/
 
 ---
 
-## 拼图 2：外接显示输出 DP TX + PS176（攻坚中）
+## 拼图 2：外接显示输出 DP TX + RTD2172（已完成）
 
 ### 1. 目标与背景
-L410 配有标准全功能 USB Type-C 接口（支持 DP Alt Mode）与 HDMI 接口。目前主线系统仅点亮了内置的 2160×1440 eDP 屏幕，插上外部显示器无画面输出。通过打通外接显示链，将使 L410 具备真正的现代双屏与投影展示能力。
+L410 配有标准全功能 USB Type-C 接口（支持 DP Alt Mode）与机身 HDMI 接口。目前主线系统仅点亮了内置的 2160×1440 eDP 屏幕。通过打通外接显示链，将使 L410 具备真正的现代双屏扩展与投影展示能力。
 
-### 2. 硬件拓扑与控制链
+### 2. 真实硬件拓扑与控制链
+经由实机 MMIO 嗅探与出厂内核（4.19.71）反汇编逆向工程，确认了硬件链路：
+- **DP 发送器**：Synopsys DesignWare Cores DP TX v2.10*（MMIO `0xf8500000`，实测 Hardware ID 为 `0x900116c3`）。
+- **Combo PHY**：USB 3.1 / DP 组合 PHY (`0xf8481000`)，以 `TCA_MUX_USB_DP2` 模式保留 2 条高速差分 Lane 供 DP 视频流使用（2 lanes @ 2.7 Gbps HBR）。
+- **DP 转 HDMI 桥片**：实机搭载 Realtek RTD2172 桥片（I2C 地址 `0x35`，挂载于 I2C4 `fa04d000.i2c`，实现 DP 1.2 到 HDMI 2.0 转换）。
+- **EC 供电控制**：桥片电源受控于机身 EC（`huawei-echub`），通过 EC 寄存器 `0x02b2` 的命令 `0x53`/`0x52`（LDO2，`EC_HDMI_VDD_ON`）与 `0x57`/`0x56`（LDO4，`EC_1V1_EN`）实现硬件上下电。
+- **HPD 热插拔引脚**：GPIO 282（`fa8b7000.gpio` pin 2）。
+- **像素时钟源**：`PERI_CRG` 中的 `PPLL7`，结合 22 组专用后分频算法精确驱动 1080p60 等常见显示分辨率。
+
 ```mermaid
 flowchart LR
-    DSS_CRTC["Kirin 990 DSS\n(CRTC / 渲染管道)"] --> DP_TX["DSS 内置 DP TX 控制器\n(DisplayPort Transmitter)"]
-    DP_TX --> DP_PHY["Kirin 990 DP PHY\n(1.62G / 2.7G / 5.4G)"]
-    DP_PHY --> PS176["Parade PS176HDM\n(DP 1.2 转 HDMI 2.0 桥片)"]
-    PS176 --> HDMI_PORT["外置 HDMI 接口"]
-    DP_PHY -.-> TYPEC_MUX["Type-C 交叉开关\n(DP Alt Mode)"]
-    TYPEC_MUX -.-> TYPEC_PORT["全功能 Type-C 接口"]
+    DSS_SDP["Kirin 990 DSS SDP\n(二级显示管道 LDI1)"] --> DP_TX["Synopsys DWC DP TX\n(0xf8500000, ID: 0x900116c3)"]
+    DP_TX --> DP_PHY["USB 3.1 / DP Combo PHY\n(0xf8481000, 2 lanes @ 2.7G)"]
+    DP_PHY --> RTD2172["Realtek RTD2172\n(DP 1.2 转 HDMI 2.0 桥片)"]
+    RTD2172 --> HDMI_PORT["机身外置 HDMI 接口"]
+    EC["华为 EC (huawei-echub)\n(LDO2 0x53 / LDO4 0x57)"] -.->|供电使能| RTD2172
+    HPD["SoC GPIO 282\n(fa8b7000.gpio pin 2)"] -.->|热插拔中断| DP_TX
 ```
 
-### 3. 攻坚要点与任务拆解
-1. **DSS DP TX 控制器寄存器适配**：
-   - 提取厂商 4.19 中的 DP 控制器寄存器（PHY 配置、链路训练 Link Training 状态机、Lane 均衡控制）。
-   - 将其重构为主线标准的 Linux DRM 编码器/连接器（Encoder / Connector）。
-2. **DP AUX 辅助通道与 EDID 协商**：
-   - 实现 DP AUX 通道读写功能，支持主线 DRM 框架读取外部显示器的 EDID 信息与模式列表。
-   - 实现 HPD（Hot Plug Detect）热插拔中断捕获与 DRM 事件通知。
-3. **Parade PS176 桥接芯片绑定**：
-   - PS176 通常挂载在 I2C 总线或通过 DP AUX 的 I2C-over-AUX 进行配置。
-   - 编写或绑定主线标准的 `drm/bridge/ps176.c`，控制其复位 GPIO、使能管脚与 HDMI 驱动强度。
-4. **时钟树与电源域**：
-   - 配置 DP 像素时钟（Pixel Clock）与高速串行差分时钟（Bit Clock）的分频器，确保 1080p@60Hz、2K@60Hz、4K@30Hz 正常锁相。
-5. **DP 音频传输**：
-   - 打通 DSS DP 音频驱动与 ALSA/ASoC 框架，实现画面与声音经由外接 HDMI 音频同步输出。
+### 3. 落地实施
+1. **EC 供电驱动适配**：
+   - 在 `drivers/mfd/huawei-echub.c` 中实现 `huawei_echub_hdmi_power(bool enable)`，负责 LDO2 与 LDO4 的受控上电与断电。
+2. **设备树更新**：
+   - 在 `l410/dt/fixups.d/60-graphics.dtsi` 中为 `&{/dpe@E8400000}` 补充 `hpd-gpios = <&{/amba/gpio@fa8b7000} 2 0>;`。
+3. **原生 DRM DP TX 驱动实现**：
+   - 在 `drivers/gpu/drm/hisilicon/kirin990/kirin990_dp.c` 中完整实现：
+     - DWC DP TX 控制器寄存器初始化与复位时序；
+     - 严格符合 DWC DP TX 硬件位域的 AUX 读写状态机（支持 I2C-over-AUX EDID 读取）；
+     - PPLL7 动态像素时钟计算与寄存器编程；
+     - 基于 GPIO 282 的 HPD 中断与 50ms 消抖处理；
+     - DRM KMS Encoder 和 Connector 注册与生命周期管理。
 
 ---
 
