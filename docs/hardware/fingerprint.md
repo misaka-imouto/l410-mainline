@@ -83,16 +83,22 @@ fingerprint {
 - **Linux 6.18 现代化适配**：
   1. 修复了旧版头文件中私自宏定义 `DECLARE_BITMAP` 导致覆盖 6.18 内核标准宏、引发设备结构体破坏的严重隐患；
   2. 修复 `core/shared_mem.c` 中 64 位整数与指针类型转换时的严格类型警告；
-  3. 修复 `smc_smp.c` 中 `kthread_create_worker` 创建 `ipihelper` 线程的现代化 API 兼容性；
+  3. 修复 `smc_smp.c` 中 `kthread_create_worker` 创建 `ipihelper` 线程的现代化 API 兼容性，避免销毁 worker 时重复调用 `kthread_stop` 产生的内核告警；
   4. **严格对齐麒麟 990 固件规格**：剔除源自云服务器的 `CONFIG_BIG_SESSION`，将 `struct tc_ns_smc_queue` 严格限定在单页（4KB 内、18 个槽位），使得物理命令队列字段与麒麟 990 出厂 TEEOS 固件完全吻合；
-  5. 支持 `/dev/tc_ns_client` 字符设备节点创建与安全会话管理。
+  5. **SMC 命令就绪判定优化**：在 `wait_event_internal` 与 `proc_ta_pending` 超时逻辑中引入 `is_cmd_working_done(cmd_index)` 复核，确保 TEEOS 置位 `out_bitmap` 后第一时间响应，杜绝初期 SPI 中断尚未建立时可能落入的 60 秒盲等；
+  6. **初始化时序对齐**：先执行 `mailbox_mempool_init` 注册基础内存池，再通过 `tz_spi_init` 分配并注册通知共享内存（`GLOBAL_CMD_ID_REGISTER_NOTIFY_MEMORY`），支持 `/dev/tc_ns_client` 字符设备节点创建与安全会话管理。
 
 ### 3.2 Huawei Fingerprint 驱动 (`drivers/misc/huawei-fingerprint/`)
 - **配置项**：`CONFIG_HUAWEI_FINGERPRINT=m`。
-- **功能**：
-  1. 匹配 `fpc,fingerprint` 设备树节点；
+- **设备树现代化映射 (`09-laptop.dtsi`)**：
+  - 固件设备树中仅含有旧版数字属性 `fingerprint,reset_gpio = <0xc7>`（199）与 `fingerprint,irq_gpio = <0xea>`（234）。在 Linux 6.x 中，PL061 采用动态 GPIO 基号分配（从 512 向下分配），直接申请整型 GPIO 会因基号未命中而持续陷入 `-EPROBE_DEFER`；
+  - 在 `09-laptop.dtsi` 中通过标准 phandle 明确映射：
+    - `reset-gpios = <&{/amba/gpio@fa8ac000} 7 1>;`（第 24 组 PL061，Pin 7，低电平复位，即 $24 \times 8 + 7 = 199$）；
+    - `irq-gpios = <&{/amba/gpio@fa8b1000} 2 0>;`（第 29 组 PL061，Pin 2，高电平/边沿触发，即 $29 \times 8 + 2 = 234$）。
+- **驱动功能与现代化实现**：
+  1. 优先使用 `devm_gpiod_get_optional` 获取 GPIO 描述符并使用 `gpiod_to_irq` 解析内核 VIRQ；
   2. 控制 GPIO 199 信号线输出高低电平，完成 FPC 芯片上电与复位序列；
-  3. 注册 GPIO 234 双边沿触发中断，在用户轻触电源键时产生 IRQ，通过 waitqueue 与 `sysfs_notify` 唤醒非安全世界等待进程；
+  3. 注册 GPIO 234 上升沿触发中断，在用户轻触电源键时产生 IRQ，通过 waitqueue 与 `sysfs_notify` 唤醒非安全世界等待进程；
   4. 导出 `/dev/fingerprint` 字符设备，并实现标准 ioctl 接口（`FP_IOC_CMD_GET_DEVICE_INFO`、`FP_IOC_CMD_ENABLE_IRQ` 等）；
   5. 提供 `/sys/class/huawei_fp/fingerprint/` 状态监控接口。
 
