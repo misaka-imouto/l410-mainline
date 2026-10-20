@@ -206,14 +206,15 @@ L410 的右上角电源键集成了 FPC 电容式指纹传感器（识别码 `0x
 我们在 Linux 6.18 主线内核中实现了完整的安全桥梁：
 1. **iTrustee tzdriver 安全网关 (`drivers/tee/itrustee/`)**：
    - 适配开源 openEuler iTrustee 驱动至现代 Linux 6.18 LTS，消除宏定义冲突与严格类型警告。
+   - 严格对齐麒麟 990 固件规格：剔除源自云服务器的 `CONFIG_BIG_SESSION`，将 `struct tc_ns_smc_queue` 严格限定在单页（4KB 内、18 个槽位），使得物理命令队列字段与麒麟 990 出厂 TEEOS 固件完全吻合。
    - 实现 SMC 调用处理，导出 `/dev/tc_ns_client` 字符设备。
-   - 内核配置项：`CONFIG_TZDRIVER=y`。
+   - 内核配置项：`CONFIG_TZDRIVER=m`（模块化编译，配合用户态 `teecd` 启动时序加载）。
 2. **Huawei Fingerprint 平台驱动 (`drivers/misc/huawei-fingerprint/`)**：
    - 匹配设备树 `fpc,fingerprint` 节点。
    - 控制 GPIO 199 进行芯片复位与供电切换。
    - 注册 GPIO 234 双边沿触发中断，通过 poll 等待队列与 sysfs 通知机制唤醒非安全世界监听进程。
    - 导出 `/dev/fingerprint` 字符设备，并实现标准硬件信息与控制 ioctl。
-   - 内核配置项：`CONFIG_HUAWEI_FINGERPRINT=y`。
+   - 内核配置项：`CONFIG_HUAWEI_FINGERPRINT=m`。
 3. **内核配置片段**：`l410/configs/88-fingerprint-tz.config`。
 
 ### 3. 用户态生物认证栈与系统集成
