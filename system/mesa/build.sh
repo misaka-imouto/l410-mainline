@@ -24,7 +24,7 @@ lib=libgallium-${ver#*:}.so
 common=(--prefix=/usr --libdir=lib/aarch64-linux-gnu --buildtype=plain
 	-Dc_args="-O2 -g1" -Dcpp_args="-O2 -g1"
 	-Ddri-drivers-path=/usr/lib/aarch64-linux-gnu/dri -Dplatforms=x11,wayland
-	-Dvulkan-drivers= -Dvulkan-layers= -Dglvnd=enabled -Db_ndebug=true -Dbuild-tests=false
+	-Dvulkan-drivers=panfrost -Dvulkan-layers= -Dglvnd=enabled -Db_ndebug=true -Dbuild-tests=false
 	-Dglx-direct=true -Dgbm=enabled -Dgles1=disabled -Dgles2=enabled -Dteflon=false
 	-Dgallium-va=disabled -Dgallium-rusticl=false -Dvideo-codecs= -Dlmsensors=disabled
 	-Dvalgrind=disabled)
@@ -41,5 +41,10 @@ else
 	B=build-l410
 	[ -d $B ] || meson setup $B "${common[@]}" -Dgallium-drivers=panfrost,softpipe,llvmpipe -Dllvm=enabled
 fi
-nice -n 10 ninja -C $B src/gallium/targets/dri/$lib
+targets=(src/gallium/targets/dri/$lib)
+if [ -f "$B/build.ninja" ] && grep -q "libvulkan_panfrost.so" "$B/build.ninja"; then
+	targets+=(src/panfrost/vulkan/libvulkan_panfrost.so)
+fi
+nice -n 10 ninja -C $B "${targets[@]}"
 ls -l $PWD/$B/src/gallium/targets/dri/$lib
+[ -f $PWD/$B/src/panfrost/vulkan/libvulkan_panfrost.so ] && ls -l $PWD/$B/src/panfrost/vulkan/libvulkan_panfrost.so || true

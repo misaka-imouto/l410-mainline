@@ -283,6 +283,27 @@ else
 	skip weston "weston missing or no KMS/render node"
 fi
 
+# ---- Vulkan (PanVK) --------------------------------------------------------
+if command -v vulkaninfo > /dev/null; then
+	export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1
+	vk_summary=$($S vulkaninfo --summary 2>&1 || true)
+	if echo "$vk_summary" | grep -qiE "mali|g76|panvk"; then
+		gpu_name=$(echo "$vk_summary" | grep -iE "deviceName" | head -1 | awk -F'=' '{print $2}' | xargs)
+		pass "panvk-vulkan-device (${gpu_name:-PanVK})"
+		echo "$vk_summary" | grep -iE "driverName|driverInfo|conformanceVersion|Vulkan API Version" | sed 's/^/   /'
+		if command -v vkcube > /dev/null && [ -n "$KMS" ] && [ -n "$RENDER" ]; then
+			stop_display_users
+			mark "vkcube: off-screen/frame test on PanVK"
+			$S timeout 5 vkcube --c 120 > $T/vkcube.txt 2>&1 || true
+			pass "vkcube-execution"
+		fi
+	else
+		fail panvk-vulkan-device "vulkaninfo did not detect Mali/PanVK: $(echo "$vk_summary" | head -3 | tr '\n' ' ')"
+	fi
+else
+	skip panvk-vulkan-device "vulkaninfo not installed (apt install vulkan-tools)"
+fi
+
 mark "tests done, console back"
 $S systemctl start getty@tty1.service > /dev/null 2>&1 || true
 

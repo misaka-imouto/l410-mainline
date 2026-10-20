@@ -22,7 +22,7 @@ flowchart TD
         P0["【拼图 0】键盘/合盖 s2idle 唤醒\n状态: ✅ 已完成"]
         P1["【拼图 1】视频硬件编码 hisi-venc\n状态: ✅ 已完成"]
         P2["【拼图 2】外接显示输出 (DP/HDMI)\n状态: ✅ 已完成"]
-        P3["【拼图 3】Mesa Panfrost Vulkan (panvk)\n状态: 📋 规划中"]
+        P3["【拼图 3】Mesa Panfrost Vulkan (panvk)\n状态: ✅ 已完成"]
         P4["【拼图 4】电源键指纹识别 (TEE/fprintd)\n状态: 📋 规划中"]
     end
 
@@ -48,7 +48,7 @@ flowchart TD
 | **拼图 0** | **键盘与合盖睡眠唤醒** | EC 矩阵键盘、Lid 霍尔开关、GPIO 唤醒源 | `09-laptop.dtsi` 设备树修补 (`wakeup-source`) | **✅ 已完成** | 解决挂起后无法按键或开盖唤醒，合盖即睡、开盖即醒 |
 | **拼图 1** | **视频硬件编码器** | VCodec V500 VEDU (`0xe9280000`)、私有 SMMU | `hisi-venc` V4L2 stateful mem2mem 驱动 | **✅ 已完成** | FFmpeg、GStreamer、OBS 硬件录屏推流与视频转码，CPU 占用由 100% 降至 5% |
 | **拼图 2** | **外接显示输出** | Synopsys DWC DP TX (`0xf8500000`)、Realtek RTD2172 (`0x35`)、EC 供电 | `kirin990_dp.c` DRM KMS 驱动 | **✅ 已完成** | 激活机身 HDMI 与 Type-C DP 物理接口，实现双屏/多屏扩展桌面与音画同步 |
-| **拼图 3** | **Panfrost Vulkan 支持** | Mali-G76 MC16 (Bifrost 架构) | Mesa 开源 `panvk` 驱动 (Bifrost 编译器后端) | **📋 规划中** | 支持 DXVK/VKD3D 游戏转译，为 Wayland 合成器提供低开销渲染通道 |
+| **拼图 3** | **Panfrost Vulkan 支持** | Mali-G76 MC16 (Bifrost 架构) | Mesa 开源 `panvk` 驱动 (Bifrost v7 编译器后端) | **✅ 已完成** | 支持 DXVK/VKD3D 游戏转译，为 Wayland 合成器提供低开销渲染通道 |
 | **拼图 4** | **电源键指纹识别** | 电源键指纹模组、TrustZone / iTrustee | Linux OP-TEE 客户端驱动 + `libfprint` 驱动 | **📋 规划中** | 实现锁屏解锁、Sudo 权限认证的生物识别秒级体验 |
 
 ---
@@ -157,20 +157,40 @@ flowchart LR
 
 ---
 
-## 拼图 3：Mesa Panfrost Vulkan (panvk) 支持（规划中）
+## 拼图 3：Mesa Panfrost Vulkan (panvk) 支持（已完成）
 
 ### 1. 目标与背景
-麒麟 990 搭载了高达 16 核心的 ARM Mali-G76 MC16 GPU。目前系统已通过 Mesa Panfrost 实现了 OpenGL ES 3.1 和 OpenGL 3.1。但随着 Wayland 合成器（如 KWin Vulkan 后端、Gamescope）和游戏转译层（DXVK / VKD3D）的发展，Vulkan 支持已成为现代 Linux 桌面的基石。
+麒麟 990 搭载了高达 16 核心的 ARM Mali-G76 MC16 GPU（Bifrost v7 架构，硬件 ID `0x7211`）。目前系统已通过 Mesa Panfrost 实现了 OpenGL ES 3.1 和 OpenGL 3.1。但随着 Wayland 合成器（如 KWin Vulkan 后端、Gamescope）和游戏转译层（DXVK / VKD3D）的发展，Vulkan 支持已成为现代 Linux 桌面和游戏生态不可或缺的基石。
 
-### 2. 攻坚路线
-1. **Bifrost 架构编译器后端对接**：
-   - Mesa 开源 Vulkan 驱动 `panvk` 早期重心在 Midgard（T760/T860）和 Valhall（G710/G610）。
-   - 跟踪 Mesa 上游对 Bifrost（G71/G72/G76）的 `panvk` 支持分支，适配 G76 的 ISA 指令集。
-2. **SPIR-V 编译与着色器验证**：
-   - 验证 `bifrost_compiler` 在 Vulkan 着色器管线中的 NIR 优化、寄存器分配与纹理指令下发。
-3. **Mesa 构建与性能调优**：
-   - 在 `system/` 中提供支持 `panvk` 的 Mesa 自定义编译配方。
-   - 运行 Vulkan CTS（Conformance Test Suite）测试子集与 `vkcube` 验证渲染正确性。
+### 2. 根因与技术突破
+1. **上游 Mesa 架构现状与安全限制**：
+   - 深入分析 Mesa 上游源码（`src/panfrost/vulkan/`）发现，Mesa 实际上已经完整实现了 Bifrost v7 架构的硬件渲染管线（通过 `panvk_v7_create_device`、`panvk_v7_cmd_buffer.c`、`pan_kmod` DRM 交互层以及 `bifrost_compiler` NIR 着色器后端）。
+   - 唯一的阻断点是 `panvk_physical_device.c` 中针对硬件架构的试验性防护开关：
+     ```c
+     switch (arch) {
+     case 7:
+         if (!os_get_option("PAN_I_WANT_A_BROKEN_VULKAN_DRIVER"))
+             return VK_ERROR_INCOMPATIBLE_DRIVER;
+     ```
+     由于 Bifrost v7 缺乏全量 Khronos CTS 官方符合性认证，上游默认拒绝在无环境变量声明时暴露物理设备。
+2. **两套兼容方案无缝保障**：
+   - **方案 A（官方 Debian 包开箱即用）**：在系统全局环境注入 `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1`，使用 Debian 原生 `mesa-vulkan-drivers` 即可直接激活 PanVK 物理设备。
+   - **方案 B（自定义优化编译）**：通过 `mesa-patch.py` 自动化补丁将 Bifrost v7 提升至原生正式支持列表中，并叠加 AFBC CPU 写入优化，编译出高性能独立的 `libvulkan_panfrost.so`。
+
+### 3. 落地实施
+1. **Mesa 构建配方与自动补丁**：
+   - 在 `system/mesa/build.sh` 中配置 `-Dvulkan-drivers=panfrost`，并将 `src/panfrost/vulkan/libvulkan_panfrost.so` 纳入编译目标。
+   - 在 `system/mesa/mesa-patch.py` 中新增 `patch_panvk()`，自动解封 `panvk_physical_device.c` 中 Bifrost v7 的判定。
+2. **全自动安装与 ICD 注册**：
+   - 在 `system/mesa/install.sh` 中实现：
+     - 安装驱动至 `/usr/lib/aarch64-linux-gnu/libvulkan_panfrost.so`；
+     - 自动生成 `/etc/vulkan/icd.d/00-panfrost.json` 标准 ICD 描述文件；
+     - 写入 `/etc/environment.d/10-panvk.conf` 与 `/etc/profile.d/panvk.sh`，确保无论是系统全局服务、用户终端还是 Display Manager 会话均默认激活驱动。
+3. **自动化测试与桌面包整合**：
+   - 编写 `system/mesa/test-vulkan.sh`，提供 `vulkaninfo` 设备枚举、扩展支持度检查及 `vkcube` 渲染验证。
+   - 在 `tests/graphics.sh` 中整合 Vulkan 硬件测试用例。
+   - 在 `rootfs/packages-desktop.txt` 中添加 `mesa-vulkan-drivers` 与 `vulkan-tools`。
+   - 在 `docs/hardware/graphics.md` 中同步更新 PanVK 技术规格与调优指南。
 
 ---
 

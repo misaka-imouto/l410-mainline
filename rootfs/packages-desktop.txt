@@ -13,7 +13,7 @@ tuned tuned-ppd systemd-oomd systemd-timesyncd apparmor apparmor-utils
 exfatprogs ntfs-3g udftools cifs-utils cryptsetup-bin cups ppp usb-modeswitch modemmanager
 
 # GPU and display test tools (tests/graphics.sh and friends)
-mesa-utils mesa-utils-bin libdrm-tests kmscube glmark2-es2-drm glmark2-es2-wayland drm-info read-edid
+mesa-utils mesa-utils-bin libdrm-tests kmscube glmark2-es2-drm glmark2-es2-wayland drm-info read-edid mesa-vulkan-drivers vulkan-tools
 
 # performance tools (tests/bench, tests/perf.sh)
 linux-perf bpftrace stress-ng iperf3 python3-websocket
