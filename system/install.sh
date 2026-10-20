@@ -33,7 +33,7 @@
 set -e
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 export L410_SYSTEM=$HERE
-ALL="base desktop hardware perf sched-ext mem input video mesa launch apps"
+ALL="base desktop hardware fingerprint perf sched-ext mem input video mesa launch apps"
 STAGES=
 while [ $# -gt 0 ]; do
 	case $1 in

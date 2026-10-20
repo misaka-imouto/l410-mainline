@@ -1,0 +1,8 @@
+# Udev rules for Huawei Qingyun L410 Fingerprint Sensor and iTrustee TEE client
+
+# iTrustee ARM TrustZone SMC client gateway
+KERNEL=="tc_ns_client", MODE="0666", GROUP="tee"
+
+# Huawei Power Button Capacitive Fingerprint Sensor (FPC1020/1025 compatible)
+KERNEL=="fingerprint", MODE="0660", GROUP="input"
+SUBSYSTEM=="huawei_fp", MODE="0660", GROUP="input"

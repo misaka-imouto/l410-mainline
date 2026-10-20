@@ -19,14 +19,15 @@ GPU 用开源的 Panfrost/Mesa，不再依赖厂商内核和闭源 libmali。
 | 有线网 RTL8168 | 可用 | PCIe |
 | WiFi / 蓝牙 Hi1103 | 可用 | WPA2、WPA3；需要从机器自带的麒麟拷固件（部署脚本自动做） |
 | 屏幕 2160×1440 eDP | 可用 | 60 Hz，关屏时整条显示链断电，硬件光标，背光 |
-| GPU Mali-G76 MC16 | 可用 | Panfrost，OpenGL ES 3.1 / OpenGL 3.1（Mesa 26.1） |
+| GPU Mali-G76 MC16 | 可用 | Panfrost，OpenGL ES 3.1 / OpenGL 3.1（Mesa 26.1），PanVK Vulkan 1.3 硬件加速（拼图 3 已完成） |
 | 声卡 Hi6405 + 2×TAS2562 | 可用 | 扬声器、耳机、内置麦克风 |
 | 键盘、触控板、F 行热键、电池、合盖 | 可用 | 内置键盘与合盖传感器支持 s2idle 唤醒（拼图 0 已完成） |
 | 睡眠 | s2idle 可用 | 按键或开盖即刻唤醒；deep 唤醒会变成冷启动，默认不用 |
 | 硬件视频编解码 | 可用 | 解码支持 H.264/HEVC/VP9/VP8/MPEG-2；编码支持 `hisi-venc`（H.264/HEVC V4L2 M2M，拼图 1 已完成） |
-| DP/HDMI 外接显示、指纹、Vulkan | 攻坚与规划中 | 详见 [硬件拼图路线图](docs/puzzles-roadmap.md) |
+| DP/HDMI 外接显示 | 可用 | Synopsys DWC DP TX + RTD2172，支持 HDMI / Type-C DP 双屏扩展显示（拼图 2 已完成） |
+| 电源键指纹识别 | 可用 | FPC1020/1025 + iTrustee TEE 安全隔离，支持桌面 PAM / sudo 秒级生物认证（拼图 4 已完成） |
 
-各部件的细节在 [docs/hardware/](docs/hardware/)，硬件补完计划见 [docs/puzzles-roadmap.md](docs/puzzles-roadmap.md)，已知问题见 [docs/known-issues.md](docs/known-issues.md)。
+各部件的细节在 [docs/hardware/](docs/hardware/)，5 大核心硬件补完已全部达成（详见 [docs/puzzles-roadmap.md](docs/puzzles-roadmap.md)），已知问题见 [docs/known-issues.md](docs/known-issues.md)。
 
 ## 在一台新的 L410 上安装
 

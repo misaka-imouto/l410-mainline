@@ -46,6 +46,8 @@ L410 的内核配置是 arm64 defconfig 加上内核树（[linux-l410](https://g
 | `70-wifi-bt` | `STAGING`、`HI110X=m`、`CFG80211=m`、`BT=m`、`RFKILL=m` | Hi110x 的 WiFi（PCIe RC1）和蓝牙（BUART，uart4）。见 [hardware/wifi-bt.md](hardware/wifi-bt.md) |
 | `80-audio` | `SND_SOC_HI6405_L410`、`SND_SOC_TAS2562` | Hi6405 编解码器（SSI + SLIMbus）、ASP DMA、TAS2562 智能功放。见 [hardware/audio.md](hardware/audio.md) |
 | `85-vcodec` | `VIDEO_HISI_VDEC=m` | VDH 视频解码器（V4L2 无状态），连带选上 v4l2-mem2mem、videobuf2-dma-sg、v4l2-h264、v4l2-vp9。见 [hardware/vcodec.md](hardware/vcodec.md) |
+| `86-venc` | `VIDEO_HISI_VENC=m` | VEDU 视频编码器（V4L2 状态式 mem2mem），H.264 与 HEVC 硬件编码。见 [hardware/vcodec.md](hardware/vcodec.md#视频硬件编码hisi-venc) |
+| `88-fingerprint-tz` | `TEE=y`、`TZDRIVER=y`、`HUAWEI_FINGERPRINT=y` | iTrustee 安全世界 SMC 客户端驱动（tzdriver，`/dev/tc_ns_client`）与电源键电容指纹驱动（`/dev/fingerprint`）。见 [hardware/fingerprint.md](hardware/fingerprint.md) |
 
 ## 性能与功耗：90-perf
 

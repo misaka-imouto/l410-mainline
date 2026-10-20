@@ -23,7 +23,7 @@ flowchart TD
         P1["【拼图 1】视频硬件编码 hisi-venc\n状态: ✅ 已完成"]
         P2["【拼图 2】外接显示输出 (DP/HDMI)\n状态: ✅ 已完成"]
         P3["【拼图 3】Mesa Panfrost Vulkan (panvk)\n状态: ✅ 已完成"]
-        P4["【拼图 4】电源键指纹识别 (TEE/fprintd)\n状态: 📋 规划中"]
+        P4["【拼图 4】电源键指纹识别 (TrustZone/TEE)\n状态: ✅ 已完成"]
     end
 
     KBD --> P0
@@ -37,7 +37,7 @@ flowchart TD
         P1 --> |"V4L2 M2M 标准接口"| Media["FFmpeg / GStreamer / OBS"]
         P2 --> |"DRM KMS / DP-AUX"| Display["Wayland 多屏扩展显示"]
         P3 --> |"Vulkan 1.3 / SPIR-V"| Graphics["DXVK / 游戏 / 合成器加速"]
-        P4 --> |"fprintd / PAM"| Auth["系统登录 / Sudo 指纹提权"]
+        P4 --> |"DBus / PAM"| Auth["系统登录 / Sudo 指纹提权"]
     end
 ```
 
@@ -49,7 +49,7 @@ flowchart TD
 | **拼图 1** | **视频硬件编码器** | VCodec V500 VEDU (`0xe9280000`)、私有 SMMU | `hisi-venc` V4L2 stateful mem2mem 驱动 | **✅ 已完成** | FFmpeg、GStreamer、OBS 硬件录屏推流与视频转码，CPU 占用由 100% 降至 5% |
 | **拼图 2** | **外接显示输出** | Synopsys DWC DP TX (`0xf8500000`)、Realtek RTD2172 (`0x35`)、EC 供电 | `kirin990_dp.c` DRM KMS 驱动 | **✅ 已完成** | 激活机身 HDMI 与 Type-C DP 物理接口，实现双屏/多屏扩展桌面与音画同步 |
 | **拼图 3** | **Panfrost Vulkan 支持** | Mali-G76 MC16 (Bifrost 架构) | Mesa 开源 `panvk` 驱动 (Bifrost v7 编译器后端) | **✅ 已完成** | 支持 DXVK/VKD3D 游戏转译，为 Wayland 合成器提供低开销渲染通道 |
-| **拼图 4** | **电源键指纹识别** | 电源键指纹模组、TrustZone / iTrustee | Linux OP-TEE 客户端驱动 + `libfprint` 驱动 | **📋 规划中** | 实现锁屏解锁、Sudo 权限认证的生物识别秒级体验 |
+| **拼图 4** | **电源键指纹识别** | 电源键电容指纹 (FPC1020/1025)、TrustZone SPI1 | iTrustee tzdriver (`/dev/tc_ns_client`) + huawei-fingerprint (`/dev/fingerprint`) | **✅ 已完成** | 打通安全世界 TrustZone TA 通道与中断捕获，实现桌面 PAM 与锁屏秒级生物识别 |
 
 ---
 
@@ -194,20 +194,40 @@ flowchart LR
 
 ---
 
-## 拼图 4：电源键指纹识别 (TEE/fprintd)（规划中）
+## 拼图 4：电源键指纹识别与 TrustZone 安全隔离（已完成）
 
-### 1. 目标与背景
-L410 的右上角电源键集成了电容式指纹识别传感器。出厂状态下由华为 iTrustee 安全系统保护。若能在主线 Linux 下点亮指纹识别，即可实现 Linux PAM 登录、锁屏解锁与 `sudo` 提权的指纹秒级认证。
+### 1. 痛点问题与硬件安全隔离
+L410 的右上角电源键集成了 FPC 电容式指纹传感器（识别码 `0x204`，FPC1020/1025 系列）。在 ARM 移动与桌面高安全规范下：
+- **物理总线隔离**：传感器所在的 SPI1 总线（`0xfa048000`）在固件启动时已被 ATF 安全配置为 Secure World 独占，主线 Linux（Normal World）无法直接读写 SPI1 寄存器。
+- **生物特征数据安全**：指纹原始图像、特征提取与模板比对全程在 iTrustee TEE（S-EL1 BL32）的安全飞地内存中运行，明文生物数据永不出安全世界。
+- **非安全世界职责**：主线 Linux 必须提供复位电源控制（GPIO 199）、轻触中断响应（GPIO 234）、SMC 安全世界通信网关（`/dev/tc_ns_client`）与平台设备节点（`/dev/fingerprint`）。
 
-### 2. 攻坚路线
-1. **物理硬件通路分析**：
-   - 分析指纹传感器所挂载的 SPI 总线控制器基址与中断 GPIO。
-   - 评估指纹模组通信协议是否可直接在非安全世界读取，还是必须经过 TrustZone（ATF / TEE）。
-2. **TEE 通信驱动适配**：
-   - 如必须经由 TrustZone，适配主线 Linux 的 OP-TEE 客户端驱动或将出厂的 `tzdriver` 适配至 6.18。
-3. **用户态认证栈对接**：
-   - 编写 `libfprint` 专用驱动后端，对接系统标准的 `fprintd` 守护进程。
-   - 配置 PAM 模块：`/etc/pam.d/common-auth` 集成 `pam_fprintd.so`。
+### 2. 架构设计与内核驱动突破
+我们在 Linux 6.18 主线内核中实现了完整的安全桥梁：
+1. **iTrustee tzdriver 安全网关 (`drivers/tee/itrustee/`)**：
+   - 适配开源 openEuler iTrustee 驱动至现代 Linux 6.18 LTS，消除宏定义冲突与严格类型警告。
+   - 实现 SMC 调用处理，导出 `/dev/tc_ns_client` 字符设备。
+   - 内核配置项：`CONFIG_TZDRIVER=y`。
+2. **Huawei Fingerprint 平台驱动 (`drivers/misc/huawei-fingerprint/`)**：
+   - 匹配设备树 `fpc,fingerprint` 节点。
+   - 控制 GPIO 199 进行芯片复位与供电切换。
+   - 注册 GPIO 234 双边沿触发中断，通过 poll 等待队列与 sysfs 通知机制唤醒非安全世界监听进程。
+   - 导出 `/dev/fingerprint` 字符设备，并实现标准硬件信息与控制 ioctl。
+   - 内核配置项：`CONFIG_HUAWEI_FINGERPRINT=y`。
+3. **内核配置片段**：`l410/configs/88-fingerprint-tz.config`。
+
+### 3. 用户态生物认证栈与系统集成
+在 `l410-mainline` 中完整打通用户态服务链：
+1. **设备权限与 Udev 规则** (`system/fingerprint/99-huawei-fingerprint.rules`)：
+   - 配置 `/dev/tc_ns_client` 与 `/dev/fingerprint` 设备权限与用户组。
+2. **服务与守护进程整合** (`system/fingerprint/install.sh`)：
+   - 自动验证并链接华为签名指纹 TA（`a32b3d00-cb57-11e3-9c1a-0800200c9a66.sec`）。
+   - 启用 `teecd.service`（TEE 客户端守护进程）与 `hwfp_init.service`（`fingerprint_daemon`）。
+   - 对接 `deepin-authenticate.service`，注册 DBus `com.huawei.Fingerprint`，并联动 Linux PAM（`pam_deepin_authentication.so` / `pam_fprintd.so`）。
+3. **自动化测试与诊断** (`system/fingerprint/test-fingerprint.sh`)：
+   - 提供开箱即用的硬件节点、TA 镜像、守护进程与 DBus 服务完整性自检。
+   - 提供 `--monitor` 交互模式，实时监测手指按压电源键产生的中断信号。
+4. **技术规格文档**：在 `docs/hardware/fingerprint.md` 中同步归档完整的物理引脚、TrustZone 交互时序与调试指南。
 
 ---
 

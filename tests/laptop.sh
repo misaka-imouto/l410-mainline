@@ -250,5 +250,17 @@ echo "$log" | sed 's/^/LOG /' | head -40
 echo "$log" | grep -i -E "error|fail|timeout|bad PEC" | grep -v -i "6-0015" > /dev/null &&
 	wrn "kernel log has errors for laptop devices (see LOG lines)" || ok "kernel log: no errors for laptop devices"
 
+# ---------------------------------------------------------------- Fingerprint & TEE
+if [ -c /dev/tc_ns_client ]; then
+	ok "tee: /dev/tc_ns_client present (iTrustee tzdriver)"
+else
+	inf "tee: /dev/tc_ns_client not present (tzdriver module/built-in)"
+fi
+if [ -c /dev/fingerprint ]; then
+	ok "fingerprint: /dev/fingerprint present (huawei-fingerprint)"
+else
+	inf "fingerprint: /dev/fingerprint not present (huawei_fingerprint module/built-in)"
+fi
+
 echo "== laptop: $pass passed, $fail failed, $warn warnings"
 [ $fail = 0 ]
