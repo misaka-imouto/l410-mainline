@@ -6,13 +6,13 @@
 
 | 部件 | 情况 |
 |---|---|
-| DP / HDMI 输出 | 没有移植。厂商的 DP 控制器驱动约 6000 行，外加 PS176（DP 转 HDMI）；DP 音频也就没有 |
-| 指纹 | 传感器挂在 TEE 后面，需要厂商的 tzdriver（约 1.7 万行）和用户态 teecd、HAL，没有做 |
-| 硬件视频编码 | hisi-venc 驱动已实现 H.264/HEVC 状态式硬件编码（[hardware/vcodec.md](hardware/vcodec.md)） |
-| Vulkan | Mesa 的 panvk 对 Bifrost（G76）还是实验性的，没有测试 |
+| DP / HDMI 输出 | **已完成（拼图 2）**：DRM KMS 驱动 `kirin990_dp` + RTD2172，激活外接双屏扩展显示 |
+| 指纹识别 | **已完成（拼图 4）**：iTrustee TEE 网关 `tzdriver` + 平台驱动 `huawei-fingerprint` + 用户态服务栈 |
+| 硬件视频编码 | **已完成（拼图 1）**：`hisi-venc` V4L2 状态式 mem2mem 驱动已合并，支持 H.264/HEVC 硬件编码 |
+| Vulkan | **已完成（拼图 3）**：Mesa 开源 `panvk` 已支持 Mali-G76 (Bifrost v7) Vulkan 1.3 硬件加速 |
 | 风扇转速 | 风扇完全由 EC 根据板上热敏电阻控制，厂商系统里也没有驱动，读不到转速 |
 | KVM | 固件只给 EL1，没有 EL2，不能用虚拟化 |
-| USB OTG、Type-C PD、充电器类型识别 | 没做 |
+| USB OTG、Type-C PD、充电器类型识别 | 暂未实现 |
 
 ## 已知缺陷
 
