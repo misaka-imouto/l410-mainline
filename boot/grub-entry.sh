@@ -35,7 +35,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$UUID" ] || [ "$MODE" = remove ] || { sed -n '2,17p' "$0"; exit 2; }
 
-DEV=$(blkid -L SYSBOOT) || { echo "no partition labelled SYSBOOT" >&2; exit 1; }
+DEV=$(blkid -L SYSBOOT 2>/dev/null || blkid -L Boot 2>/dev/null) || { echo "no partition labelled SYSBOOT or Boot" >&2; exit 1; }
 MNT=$(findmnt -n -o TARGET --source "$DEV" | head -1)
 RESTORE=
 if [ -z "$MNT" ]; then
