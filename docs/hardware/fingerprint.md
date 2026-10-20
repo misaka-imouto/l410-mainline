@@ -78,16 +78,17 @@ fingerprint {
 为支撑完整的生物认证协议栈，`linux-l410` 内核引入了两个专用驱动模块：
 
 ### 3.1 iTrustee tzdriver (`drivers/tee/itrustee/`)
-- **配置项**：`CONFIG_TZDRIVER=y`。
+- **配置项**：`CONFIG_TZDRIVER=m`（模块化编译，随用户态 `teecd` 启动时序加载）。
 - **功能**：基于 openEuler iTrustee 项目移植，实现非安全世界与 S-EL1 TEE 之间的 SMC 通信桥梁。
 - **Linux 6.18 现代化适配**：
   1. 修复了旧版头文件中私自宏定义 `DECLARE_BITMAP` 导致覆盖 6.18 内核标准宏、引发设备结构体破坏的严重隐患；
   2. 修复 `core/shared_mem.c` 中 64 位整数与指针类型转换时的严格类型警告；
-  3. 补充了 `wakeup_pe`、`smc_set_cmd_buffer`、`teek_register_alarm_func` 等函数原型，并为未引用静态函数标记 `__maybe_unused`；
-  4. 支持 `/dev/tc_ns_client` 字符设备节点创建与安全会话管理。
+  3. 修复 `smc_smp.c` 中 `kthread_create_worker` 创建 `ipihelper` 线程的现代化 API 兼容性；
+  4. **严格对齐麒麟 990 固件规格**：剔除源自云服务器的 `CONFIG_BIG_SESSION`，将 `struct tc_ns_smc_queue` 严格限定在单页（4KB 内、18 个槽位），使得物理命令队列字段与麒麟 990 出厂 TEEOS 固件完全吻合；
+  5. 支持 `/dev/tc_ns_client` 字符设备节点创建与安全会话管理。
 
 ### 3.2 Huawei Fingerprint 驱动 (`drivers/misc/huawei-fingerprint/`)
-- **配置项**：`CONFIG_HUAWEI_FINGERPRINT=y`。
+- **配置项**：`CONFIG_HUAWEI_FINGERPRINT=m`。
 - **功能**：
   1. 匹配 `fpc,fingerprint` 设备树节点；
   2. 控制 GPIO 199 信号线输出高低电平，完成 FPC 芯片上电与复位序列；

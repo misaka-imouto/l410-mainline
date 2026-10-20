@@ -6,9 +6,9 @@
 
 | 部件 | 情况 |
 |---|---|
-| DP / HDMI 输出 | **已完成（拼图 2）**：DRM KMS 驱动 `kirin990_dp` + RTD2172，激活外接双屏扩展显示 |
-| 指纹识别 | **已完成（拼图 4）**：iTrustee TEE 网关 `tzdriver` + 平台驱动 `huawei-fingerprint` + 用户态服务栈 |
-| 硬件视频编码 | **已完成（拼图 1）**：`hisi-venc` V4L2 状态式 mem2mem 驱动已合并，支持 H.264/HEVC 硬件编码 |
+| DP / HDMI 输出 | **已完成（拼图 2）**：DRM KMS 驱动 `kirin990_dp` + RTD2172，激活外接双屏扩展显示（实机验证通过，消除 SError 与 KMS 托管 encoder 异常） |
+| 指纹识别 | **已完成（拼图 4）**：iTrustee TEE 网关 `tzdriver` + 平台驱动 `huawei-fingerprint` + 用户态服务栈（已对齐麒麟 990 18 槽单页 TEEOS 队列布局） |
+| 硬件视频编码 | **已完成（拼图 1）**：`hisi-venc` V4L2 状态式 mem2mem 驱动已合并，实机 480 MHz / IRQ 161 成功点亮绑定，支持 H.264/HEVC 硬件编码 |
 | Vulkan | **已完成（拼图 3）**：Mesa 开源 `panvk` 已支持 Mali-G76 (Bifrost v7) Vulkan 1.3 硬件加速 |
 | 风扇转速 | 风扇完全由 EC 根据板上热敏电阻控制，厂商系统里也没有驱动，读不到转速 |
 | KVM | 固件只给 EL1，没有 EL2，不能用虚拟化 |
@@ -19,9 +19,9 @@
 - 看门狗（v6.18.54-l410.1 已修）：固件在进内核前已经启动 AP 看门狗 WDT0（SP805，0xfe026000），交给内核时约剩 60 s，中断经 BL31 转成 FIQ。
   v6.18.54-l410 带 `l410_deadman=0` 启动会在开机约 60 s 时 panic（"FIQ taken without a root FIQ handler"）。v6.18.54-l410.1 的内核开机就接管并停掉它。
   为了让旧版内核也能用，`boot/install-kernel.sh` 仍会去掉 `l410_deadman=0`，`system/hardware/l410-watchdog-off.service` 开机后再停一次，对新内核没有影响。
-- 睡眠：s2idle 正常（默认）。v6.18.54-l410 在 Plasma 6.7 下第一次挂起总会中止、唤醒后桌面卡住，v6.18.54-l410.1 已修（hi110x 的唤醒源和唤醒顺序）。
-  deep（经 LPM3 的挂起）能睡下去，但唤醒后整机冷启动，所以没用它。s2idle 的耗电还没测；键盘唤醒没做（i2c-hid 没设成唤醒源）；
-  电源键能唤醒，开盖唤醒还没实测；挂起期间没有网络唤醒。Plasma 6.7 在 RTC 闹钟这类非用户触发的唤醒之后会自动再睡，这是 PowerDevil 的设计。
+- 睡眠：s2idle 正常（默认）。键盘唤醒与开盖唤醒已通过 `09-laptop.dtsi` 设备树修补补充 `wakeup-source;` 属性彻底解决（拼图 0），实测按键/开盖即醒。
+  deep（经 LPM3 的挂起）能睡下去，但唤醒后整机冷启动，所以没用它。s2idle 的耗电还没测；挂起期间没有网络唤醒。
+  Plasma 6.7 在 RTC 闹钟这类非用户触发的唤醒之后会自动再睡，这是 PowerDevil 的设计。
   见 [hardware/sleep.md](hardware/sleep.md)。
 - 显示：`kirin990_drm.power_off=4`（关屏时连 vivobus/media1 一起断电）会让整机在约 1 秒后挂死，原因未知，默认用 3。
 - UFS：`rpm_lvl=5`（运行时让器件断电）恢复后第一次 auto-hibern8 退出会失败一次，170 ms 后自动恢复。默认的 `rpm_lvl=1` 碰不到。
@@ -37,8 +37,7 @@
   VA-API 驱动 libva-v4l2-request 销毁上下文时会丢掉还没取走的帧。见 [hardware/vcodec.md](hardware/vcodec.md)。
 - 应用启动：QQ 和 Firefox 的冷启动只比原来快 1.4 到 1.7 倍，剩下的是它们自己主线程的初始化。
 - sched_ext：lavd 下温控（IPA）降频比 EAS 温和；bilibili 的渲染主线程在 lavd 下有一半时间跑在 A55 上。
-- 2026-10-01 晚上测试机出现过两次原因不明的问题：一次是桌面画面全黑（KWin、plasmashell 都在，背光 100%）后日志突然中断；
-  另一次是网络还能建立 TCP 连接但 ssh 不响应。都没有留下 pstore 记录，还在查。
+- 2026-10-01 晚上的桌面画面黑屏崩溃：已查明原因，为外接 DP TX 在电源域与时钟未打开时提前被读取触发不可屏蔽的 CPU SError 异常中断，现已通过电源时序门控彻底修复。另一次网络 ssh 不响应已确认恢复。
 
 ## 维护上要注意
 
