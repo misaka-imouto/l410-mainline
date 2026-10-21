@@ -30,7 +30,7 @@ VC-1、MPEG-4、AVS、AV1 没做。
 - **内存与 SMMU**：使用与 VDH 解码器同构的私有 SMMU（ARM 32-bit LPAE 页表，`io-pgtable`），支持 DMA-SG 零拷贝与缓冲区重构。
 - **时钟与电源**：支持 DVFS（640 / 480 / 332 / 207.5 MHz）与运行期电源管理（`pm_runtime`，空闲 200 ms 自动休眠）。
 - **配置片段**：`l410/configs/86-venc.config`（`CONFIG_VIDEO_HISI_VENC=m`）。
-- **实机验证**：在真机 Linux 6.18+ 上加载验证通过，成功匹配硬件基址 `0xe9280000` 并注册中断（`HiSilicon Kirin 990 VENC initialized (IRQ 161, clock 480000000 Hz)`）。
+- **实机验证**：在真机 Linux 6.18+ 上通过 `65-venc.dtsi` 剔除残留的不可用 SMMU 引用后，开机直接完成探活（`HiSilicon Kirin 990 VENC initialized (IRQ 162, clock 480000000 Hz)`），生成 `/dev/video0` 设备节点。
 
 ### 用户态使用
 

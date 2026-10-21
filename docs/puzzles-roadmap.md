@@ -106,6 +106,8 @@ linux-l410/drivers/media/platform/hisilicon/venc/
 - **代码提交**：
   - `linux-l410` commit `bd93f50df` (`media: platform: hisilicon: add V4L2 stateful mem2mem video encoder driver (hisi-venc)`)
   - `l410-mainline` commit `f7e04eb` (`docs: add hardware video encoding support documentation for hisi-venc`)
+- **实机探测验证**：
+  在 `l410/dt/fixups.d/65-venc.dtsi` 中剥离固件残留的未探活 SMMU 引用（`/delete-property/ iommus;`），解决延迟探测超时。6.18 内核开机由 platform 驱动瞬时完成探活，注册 `/dev/video0`（IRQ 162，时钟 480 MHz），通过真机全量检测。
 - **开箱使用验证**：
   ```bash
   # FFmpeg H.264 / HEVC 硬件编码
@@ -215,7 +217,12 @@ L410 的右上角电源键集成了 FPC 电容式指纹传感器（识别码 `0x
    - 注册 GPIO 234 双边沿触发中断，通过 poll 等待队列与 sysfs 通知机制唤醒非安全世界监听进程。
    - 导出 `/dev/fingerprint` 字符设备，并实现标准硬件信息与控制 ioctl。
    - 内核配置项：`CONFIG_HUAWEI_FINGERPRINT=m`。
-3. **内核配置片段**：`l410/configs/88-fingerprint-tz.config`。
+3. **出厂 4.19 反汇编比对与核心缺陷攻坚**：
+   - **Mailbox 越界释放与 Oops 根除**：出厂 4.19 内核仅单区 4MB 物理页池，而 openEuler 引入多池数组。固件返回 128 个 4K 页时误覆写 `g_mb_count=128`，导致异常回滚时释放越界触发 `___free_pages` Oops。通过严格截断至 `MAILBOX_POOL_COUNT` (8)，彻底消除崩溃。
+   - **屏蔽云容器特性阻断 (CMD 45)**：鲲鹏服务端容器特性 `GLOBAL_CMD_ID_REGISTER_HOST_NSID_VMID` 在移动端固件中不存在，失败后设为非致命放行，驱动顺利通过 `tc_teeos_init`。
+   - **中断与日志级别优化**：Device Tree SPI 344（GICv3 376）通过 `irq_of_parse_and_map` 正确挂载；`TEE_LOG_MASK` 由 `TZ_DEBUG_VERBOSE` 设为 `TZ_DEBUG_INFO`，消除后台 `smc_svc_thread` 在控制台的冗余抢占重试输出。
+   - **实机节点验证**：`/dev/tc_ns_client`（235, 0）与 `/dev/fingerprint`（511, 0，rst=199, irq=234, spi_cs=10, spi_num=1）均 100% 成功生成并通过实机探测。
+4. **内核配置片段**：`l410/configs/88-fingerprint-tz.config`。
 
 ### 3. 用户态生物认证栈与系统集成
 在 `l410-mainline` 中完整打通用户态服务链：

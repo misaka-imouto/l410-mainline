@@ -86,7 +86,10 @@ fingerprint {
   3. 修复 `smc_smp.c` 中 `kthread_create_worker` 创建 `ipihelper` 线程的现代化 API 兼容性，避免销毁 worker 时重复调用 `kthread_stop` 产生的内核告警；
   4. **严格对齐麒麟 990 固件规格**：剔除源自云服务器的 `CONFIG_BIG_SESSION`，将 `struct tc_ns_smc_queue` 严格限定在单页（4KB 内、18 个槽位），使得物理命令队列字段与麒麟 990 出厂 TEEOS 固件完全吻合；
   5. **SMC 命令就绪判定与协作式调度优化**：在 `wait_event_internal` 与 `proc_ta_pending` 超时逻辑中引入 `is_cmd_working_done(cmd_index)` 复核，确保 TEEOS 置位 `out_bitmap` 后第一时间响应。若短期（10ms/20ms）超时未就绪，主动发起 `SMC_OPS_SCHEDTO`（CPU 时间片让渡），向安全世界主动借出执行周期完成命令处理，杜绝因非安全世界盲等休眠导致的 TEE 线程饥饿与超时卡死；
-  6. **初始化时序对齐**：先执行 `mailbox_mempool_init` 注册基础内存池，再通过 `tz_spi_init` 分配并注册通知共享内存（`GLOBAL_CMD_ID_REGISTER_NOTIFY_MEMORY`），支持 `/dev/tc_ns_client` 字符设备节点创建与安全会话管理。
+  6. **初始化时序对齐**：先执行 `mailbox_mempool_init` 注册基础内存池，再通过 `tz_spi_init` 分配并注册通知共享内存（`GLOBAL_CMD_ID_REGISTER_NOTIFY_MEMORY`），支持 `/dev/tc_ns_client` 字符设备节点创建与安全会话管理；
+  7. **Mailbox 越界释放与 Oops 根除**：出厂 4.19 内核仅单区 4MB 物理页池，而 openEuler 引入多池数组。固件返回 128 个 4K 页时误覆写 `g_mb_count=128`，导致异常回滚时释放越界触发 `___free_pages` Oops。通过严格截断至 `MAILBOX_POOL_COUNT` (8)，彻底消除崩溃；
+  8. **屏蔽云容器特性阻断 (CMD 45)**：鲲鹏服务端容器特性 `GLOBAL_CMD_ID_REGISTER_HOST_NSID_VMID` 在移动端固件中不存在，失败后设为非致命放行，驱动顺利通过 `tc_teeos_init`；
+  9. **中断与日志级别优化**：Device Tree SPI 344（GICv3 376）通过 `irq_of_parse_and_map` 正确挂载；`TEE_LOG_MASK` 设为 `TZ_DEBUG_INFO`，消除后台 `smc_svc_thread` 在控制台的冗余抢占重试输出。
 
 ### 3.2 Huawei Fingerprint 驱动 (`drivers/misc/huawei-fingerprint/`)
 - **配置项**：`CONFIG_HUAWEI_FINGERPRINT=m`。
