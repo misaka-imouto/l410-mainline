@@ -1,0 +1,15 @@
+[Unit]
+Description=L410 test boot: run the root-mode verification and come back
+Documentation=file:/usr/local/sbin/l410-root-verify.sh
+After=graphical.target display-manager.service
+Wants=graphical.target
+ConditionPathExists=/usr/local/sbin/l410-root-verify.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/l410-root-verify.sh
+TimeoutStartSec=900
+Nice=10
+
+[Install]
+WantedBy=graphical.target

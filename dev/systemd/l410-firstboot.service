@@ -1,0 +1,15 @@
+[Unit]
+Description=L410 first-boot verification of the 6.18 kernel on a desktop root
+Documentation=file:/usr/local/sbin/l410-firstboot.sh
+After=graphical.target sddm.service systemd-logind.service
+Wants=graphical.target
+ConditionPathExists=/usr/local/sbin/l410-firstboot.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/l410-firstboot.sh
+TimeoutStartSec=2400
+Nice=5
+
+[Install]
+WantedBy=graphical.target

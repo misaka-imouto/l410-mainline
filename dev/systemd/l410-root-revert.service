@@ -1,0 +1,12 @@
+[Unit]
+Description=L410 test boot: reboot to the factory system unless kept alive
+After=multi-user.target
+
+[Service]
+Type=simple
+# The one-shot GRUB entry was consumed at boot, so a plain reboot goes back to the factory
+# system. Touch /run/l410-keep to keep the test system running (e.g. for a long soak).
+ExecStart=/bin/sh -c 'sleep 1500; [ -e /run/l410-keep ] || { echo "l410-root-revert: rebooting" > /dev/kmsg; systemctl reboot --force --force; }'
+
+[Install]
+WantedBy=multi-user.target
