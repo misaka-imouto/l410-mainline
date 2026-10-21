@@ -52,8 +52,8 @@ deep 仍可选。`kirin990_sr.deep=1` 让 deep 成为默认。
 |---|---|---|
 | RTC 闹钟 | PMIC → IRQ 88 | 验证过，日志 `PM: Triggering wakeup from IRQ 88` |
 | 电源键 | 同一条 PMIC 中断链 | 短按能唤醒（实机确认） |
-| 开盖 | 合盖开关是 gpio-keys，设备树里带 `wakeup-source` | 没有实测 |
-| 键盘 | i2c-hid | 不能唤醒：节点还没加 `wakeup-source` |
+| 开盖 | 合盖开关是 gpio-keys，设备树里带 `wakeup-source` | **已验证（拼图 0）**：`echub_lid`，开盖即刻唤醒 |
+| 键盘 | i2c-hid（`7-003a`） | **已验证（拼图 0）**：`09-laptop.dtsi` 已补 `wakeup-source`，敲击按键即刻唤醒 |
 | 网络 | Hi1103 没有网络唤醒（WoWLAN），挂起时芯片断电 | 不支持 |
 
 ## 实测结果
