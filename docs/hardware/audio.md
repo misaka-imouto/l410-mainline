@@ -2,7 +2,7 @@
 
 L410 的声卡由四部分组成：外置 codec 海思 Hi6405，把 codec 接到 SoC 的 SLIMbus，在内存和 SLIMbus 端口之间搬 PCM 的 ASP DMA，以及两颗 TI TAS2562 扬声器功放。驱动在内核仓库的 `sound/soc/hisilicon/hi6405/`（`CONFIG_SND_SOC_HI6405_L410`，内建），功放用主线的 `sound/soc/codecs/tas2562.c`。
 
-现在能用的：扬声器放音（48 kHz）、耳机通路、4 个内置数字麦录音，PipeWire 里显示为 Speaker / Internal Microphone。耳机插拔、线控按键、耳麦录音的代码都在，还没有人插耳机验证过。DP/HDMI 音频没做。
+现在能用的：扬声器放音（48 kHz）、耳机通路、4 个内置数字麦录音，PipeWire 里显示为 Speaker / Internal Microphone；**DP/HDMI 外部数字音频输出（声卡 `hisihdmi`，支持 2~8 声道，PCM 设备 `01-00`，带 HDMI Jack 与 ELD 控件）**。耳机插拔、线控按键、耳麦录音的代码都在，还没有人插耳机验证过。
 
 ## 硬件
 
@@ -140,7 +140,7 @@ debugfs 里还有：`/sys/kernel/debug/hi6405/registers` 按厂商 `/proc/audio/
 - TAS2562 的 I/V sense 反馈（厂商用在喇叭保护算法里）没用上；放大等级按厂商 0x1c。
 - 厂商初始化里 B0_P253 的 ICN 修正位、Book100 P7 的 Class-H "kink" 修正，在上游 regmap 范围（book 0、page 0-4）以外，没写。B0_P1 0x08（厂商关掉了热折返）在范围内，有意没写，保留热保护。
 - drain 最多截掉末尾 40 ms（见上文），只影响直接 drain 设备的程序。
-- DP/HDMI 音频没做。厂商做法是 `dp_audio@0`（codec DAI `dp-playback`）加 `hisi-pcm-dp`（ASP 的 HDMI DMA 通道，`dp_audio_pll` 393.216/361.2672 MHz，缓冲在 HiFi 区的固定位置）加 `hisi_dp_machine`，DP 控制器侧的音频配置在厂商 DRM 驱动里。6.18 上应由 DP 驱动注册 `hdmi-codec`，再加 ASP HDMI DMA 的 PCM component 和一个 DP link；DP 输出本身还没有，见 [graphics.md](graphics.md)。
+- **DP/HDMI 音频已实现**：在 Linux 6.18 中，由 `kirin990_dp.c` 驱动通过 DRM HDMI Audio Helper (`drm_connector_hdmi_audio_init`) 注册 `hdmi-audio-codec` 平台设备，并在 DWC DP TX 寄存器（`0xf8500000`）配置硬件音频封包（SDP 音频流、时间戳发生器与 CEA-861 InfoFrame）；ASoC 机器驱动 `sound/soc/hisilicon/hi6405/hisi_dp_card.c` 动态匹配该编解码器，绑定标准 I2S 格式并注册声卡 **Card 1: `hisihdmi`**（PCM 设备 `01-00: HDMI Audio i2s-hifi-0`，并带有 HDMI Jack、ELD 与 IEC958 控件）。实机自测 100% 验证通过。
 - 键盘上的静音灯不会随静音自动亮灭，见 [laptop.md](laptop.md)。
 
 ## 试过但没用
