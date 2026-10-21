@@ -89,7 +89,9 @@ fingerprint {
   6. **初始化时序对齐**：先执行 `mailbox_mempool_init` 注册基础内存池，再通过 `tz_spi_init` 分配并注册通知共享内存（`GLOBAL_CMD_ID_REGISTER_NOTIFY_MEMORY`），支持 `/dev/tc_ns_client` 字符设备节点创建与安全会话管理；
   7. **Mailbox 越界释放与 Oops 根除**：出厂 4.19 内核仅单区 4MB 物理页池，而 openEuler 引入多池数组。固件返回 128 个 4K 页时误覆写 `g_mb_count=128`，导致异常回滚时释放越界触发 `___free_pages` Oops。通过严格截断至 `MAILBOX_POOL_COUNT` (8)，彻底消除崩溃；
   8. **屏蔽云容器特性阻断 (CMD 45)**：鲲鹏服务端容器特性 `GLOBAL_CMD_ID_REGISTER_HOST_NSID_VMID` 在移动端固件中不存在，失败后设为非致命放行，驱动顺利通过 `tc_teeos_init`；
-  9. **中断与日志级别优化**：Device Tree SPI 344（GICv3 376）通过 `irq_of_parse_and_map` 正确挂载；`TEE_LOG_MASK` 设为 `TZ_DEBUG_INFO`，消除后台 `smc_svc_thread` 在控制台的冗余抢占重试输出。
+  9. **中断与日志级别优化**：Device Tree SPI 344（GICv3 376）通过 `irq_of_parse_and_map` 正确挂载；`TEE_LOG_MASK` 设为 `TZ_DEBUG_INFO`，消除控制台冗余 SMC 寄存器调试转储；
+  10. **出厂 4.19 反汇编比对与 SMC 抢占重试时序重构**：通过反汇编出厂 4.19 内核（`vmlinuz-4.19.71`）的 `smp_smc_send` 发现，4.19 在收到 `SMC_EXIT_PREEMPTED` 时完全不引入睡眠等待（无 `usleep_range`），也不设 50 次硬编码超时中止，而是直接使用 `cond_resched()` 调度让渡并持续调用 SMC 供 TEE 调度。openEuler 引入的 50 次休眠（每次 500-1000us）导致多页内存映射（如 128KB 通知内存与 512KB tlogger 内存）在安全世界建立页表期间被误判超时而中断。6.18 将重试门限扩展至 10000 次并移除 `usleep_range`，彻底解决多页内存注册超时；
+  11. **SMC 服务线程空闲防空转 (`smc_svc_thread_fn`)**：针对 `GLOBAL_CMD_ID_SET_SERVE_CMD` 在 TEE 无服务请求或返回非零状态时的处理，加入 100ms 可中断睡眠，杜绝无任务时的 CPU 紧凑空转。
 
 ### 3.2 Huawei Fingerprint 驱动 (`drivers/misc/huawei-fingerprint/`)
 - **配置项**：`CONFIG_HUAWEI_FINGERPRINT=m`。

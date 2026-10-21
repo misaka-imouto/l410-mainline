@@ -220,8 +220,9 @@ L410 的右上角电源键集成了 FPC 电容式指纹传感器（识别码 `0x
 3. **出厂 4.19 反汇编比对与核心缺陷攻坚**：
    - **Mailbox 越界释放与 Oops 根除**：出厂 4.19 内核仅单区 4MB 物理页池，而 openEuler 引入多池数组。固件返回 128 个 4K 页时误覆写 `g_mb_count=128`，导致异常回滚时释放越界触发 `___free_pages` Oops。通过严格截断至 `MAILBOX_POOL_COUNT` (8)，彻底消除崩溃。
    - **屏蔽云容器特性阻断 (CMD 45)**：鲲鹏服务端容器特性 `GLOBAL_CMD_ID_REGISTER_HOST_NSID_VMID` 在移动端固件中不存在，失败后设为非致命放行，驱动顺利通过 `tc_teeos_init`。
-   - **中断与日志级别优化**：Device Tree SPI 344（GICv3 376）通过 `irq_of_parse_and_map` 正确挂载；`TEE_LOG_MASK` 由 `TZ_DEBUG_VERBOSE` 设为 `TZ_DEBUG_INFO`，消除后台 `smc_svc_thread` 在控制台的冗余抢占重试输出。
-   - **实机节点验证**：`/dev/tc_ns_client`（235, 0）与 `/dev/fingerprint`（511, 0，rst=199, irq=234, spi_cs=10, spi_num=1）均 100% 成功生成并通过实机探测。
+   - **中断与日志级别优化**：Device Tree SPI 344（GICv3 376）通过 `irq_of_parse_and_map` 正确挂载；`TEE_LOG_MASK` 由 `TZ_DEBUG_VERBOSE` 设为 `TZ_DEBUG_INFO`，消除控制台冗余 SMC 寄存器调试转储。
+   - **4.19 反汇编比对与 SMC 抢占时序重构**：通过反汇编出厂 4.19 内核确认 `smp_smc_send` 在 `SMC_EXIT_PREEMPTED` 时从不加 1ms 睡眠，也不设 50 次硬编码超时中断，而是直接使用 `cond_resched()` 调度让渡。6.18 移除 `usleep_range` 并将重试上限提升至 10000 次，并为 `smc_svc_thread_fn` 增加空闲等待，彻底解决多页内存注册超时与 CPU 空转问题。
+   - **实机与远程验证**：`/dev/tc_ns_client`（235, 0）与 `/dev/fingerprint`（511, 0，rst=199, irq=234, spi_cs=10, spi_num=1）在本机与远程 L410（zhtsg-l410）上均 100% 成功生成并通过自动化探活。
 4. **内核配置片段**：`l410/configs/88-fingerprint-tz.config`。
 
 ### 3. 用户态生物认证栈与系统集成
