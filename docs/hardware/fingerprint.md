@@ -635,7 +635,38 @@ daemon 进入 invoke。接着 invoke 从 `TEEC_ERROR_INVALID_CMD(0x1)` 变成
 的 DEC 逻辑、`token[40]` 的 kernel_api、以及 operation params 的逐字节
 对齐）。
 
-## 7. 验证与诊断测试
+### 6.12 invoke token 结构已抓清；仍 GENERIC（待 operation buffer 对比）
+
+在 UOS 上 kprobe `descrambling_timestamp`（`update_timestamp` 的底层），抓到真实
+invoke token（42 字节）：
+
+```text
+token[0..31] = cfbdcb81 c190519c ec9d508f b4ecd9fa
+               26e348f6 39bee508 fa5ebe16 848a26b7   (会话内固定)
+token[32..39]= 5044f66f 50468e37 ...   (scrambled timestamp，逐次 ±1)
+token[40]    = kernel_api
+token[41]    = sync flag
+scrambling[0]= 0x5044f66f   (timestamp 的 4 字节循环 XOR key)
+```
+
+把 timestamp 解扰后是一个**小整数计数器**（UOS 约 0x27858）。6.18 侧同样成立：
+open 响应 token 的 timestamp 解扰 = **176051**（小计数器），说明 token 布局、
+scrambling 偏移、timestamp 编码方向都是对的。
+
+进一步验证：
+
+- open 和 invoke 的 token 指针是**同一个合法用户态地址**（`0x...764`，len=24）；
+- 实现 vendor `save_token_info()` 把 `[token 0..15 | timestamp 32..39]` 写回该
+  地址，`copy_to_user` 返回 0（成功）；
+- 但写回后下一条 invoke 会让 TEE 卡在 `doing_bitmap`（命令不返回），比原先
+  「快速 GENERIC」更糟，已回滚到 `7c7dcebdb`。
+
+当前 invoke 的 `cmd_id(0x29/0x66)、session_id(0xE0001)、token_phys、scrambled
+operation_phys` 都与 UOS 的取值集合一致，但 TA 仍回 `TEE_ERROR_GENERIC`。
+token/timestamp 已排除，下一个要对比的是 **operation buffer**
+（`paramtypes` + `params[]`）的逐字节内容，以及 `token[40]`/`sync` 的精确值。
+
+## 7. 验证与诊断测试## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
 
