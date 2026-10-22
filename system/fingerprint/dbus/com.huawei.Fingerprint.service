@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=com.huawei.Fingerprint
+Exec=/usr/bin/hwfp_init.sh
+User=root

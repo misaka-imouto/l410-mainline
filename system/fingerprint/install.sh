@@ -41,19 +41,26 @@ if [ ! -f "$TA_PATH" ] && [ -f "/vendor/bin/a32b3d00-cb57-11e3-9c1a-0800200c9a66
     ln -sf "/vendor/bin/a32b3d00-cb57-11e3-9c1a-0800200c9a66.sec" "$TA_PATH"
 fi
 
-# 4. Enable and start teecd service
+# 4. Install the D-Bus security policy.  dbus-daemon refuses to let
+#    fingerprint_daemon own com.huawei.Fingerprint without it, which shows up
+#    as "Connection ... is not allowed to own the service" in hw_log.txt.
+install -D -m 644 "$D/dbus/com.huawei.Fingerprint.conf" /etc/dbus-1/system.d/com.huawei.Fingerprint.conf
+install -D -m 644 "$D/dbus/com.huawei.Fingerprint.service" /usr/share/dbus-1/system-services/com.huawei.Fingerprint.service
+systemctl reload dbus 2>/dev/null || systemctl restart dbus 2>/dev/null || true
+
+# 5. Enable and start teecd service
 if [ -f "/usr/lib/systemd/system/teecd.service" ] || [ -f "/etc/systemd/system/teecd.service" ]; then
     say "Enabling teecd service (iTrustee client daemon)..."
     enable_now teecd.service || true
 fi
 
-# 5. Enable and start hwfp_init service
+# 6. Enable and start hwfp_init service
 if [ -f "/usr/lib/systemd/system/hwfp_init.service" ] || [ -f "/etc/systemd/system/hwfp_init.service" ]; then
     say "Enabling hwfp_init service (Huawei Fingerprint Daemon)..."
     enable_now hwfp_init.service || true
 fi
 
-# 6. Enable Deepin Authentication service if installed
+# 7. Enable Deepin Authentication service if installed
 if [ -f "/usr/lib/systemd/system/deepin-authenticate.service" ]; then
     say "Enabling deepin-authenticate service..."
     enable_now deepin-authenticate.service || true

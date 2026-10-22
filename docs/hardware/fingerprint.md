@@ -683,7 +683,35 @@ token/timestamp 已排除，下一个要对比的是 **operation buffer**
 UOS 上 cmd 0 在 open 之后很快完成。下一步要在 UOS 上抓 cmd 0 的真实
 smc_cmd/operation（尤其是 `params[0].value` 和 `started`），和 6.18 对比。
 
-## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
+### 6.14 DBus 策略补全；`fpc_tac_init_lib` 成为最后阻塞
+
+两处进展：
+
+- **DBus 策略**：6.18 根缺 `/etc/dbus-1/system.d/com.huawei.Fingerprint.conf`，
+  dbus-daemon 拒绝 `fingerprint_daemon` 拥有 `com.huawei.Fingerprint`
+  （`hw_log.txt`：`Connection ... is not allowed to own the service`）。
+  从 UOS 拷入策略与 activation 文件后，`busctl` 能看到服务名。仓库里已把它
+  做成 `system/fingerprint/dbus/`，由 `install.sh` 安装。
+- **干净启动下 TEE 全通**：冷启动后 `teec_init` 仅 49ms 就 OK，
+  `fpc_tac_open`、`fpc_tac_set_os_platform`、`fpc_tac_send_set_arbitrary_data_cmd`
+  全部成功（TA 已在 TEE 中缓存，不必重新 10s 加载）。
+
+剩下的唯一阻塞是 TA 命令 **`cmd 0`（`fpc_tac_init_lib`）**：
+
+- `param_types=0x3`（VALUE_INOUT），`params[0].value` 的 a/b 均为 0，
+  session `0xE0001`，与 UOS 一致；
+- UOS 上它在 674ms 内完成；6.18 上 TEE 永不返回（`doing_bitmap` 卡住），
+  而且一旦卡住会**永久污染 TEE 命令队列**，后续 `SET_CA_HASH`、
+  第二次 open session 全部跟着卡死，只能重启；
+- 临时在驱动里跳过 `cmd 0`，daemon 会立刻报
+  `fpc_tac_init_lib fpc_tac_send_cmd failed with retval: 9`，
+  说明这条命令必须由 TA 真正应答。
+
+下一步要查 `fpc_tac_init_lib` 在 TA 里做什么（安全 SPI / 传感器初始化 / SFS），
+以及为什么 6.18 的 TEE 环境下它会挂住。TA 文件 `a32b3d00-...sec` 两边都是
+1361856 字节，加载是完整的。
+
+## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
 
