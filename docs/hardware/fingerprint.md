@@ -473,20 +473,49 @@ iTrustee 仓库 `368a6eb` 的同一段源码交叉验证；它的 `set_abort_cmd
 （永远为 0 的）错位 `out[]`，误以为成功，模块才得以加载。原因是 4.19 的
 注册协议不同：vendor 注册**一整块连续** `MAILBOX_POOL_SIZE`，两个参数都是
 `VALUE_INPUT`，传的是 `page_address(all_pages)`；6.18 传的是
-`mailbox_buffer[]` 数组。完全照 vendor 协议试过一次，结果**把 TEEOS 卡死**
-（FRP/SSH 全断，只能等硬复位），所以 `3ee085bab` 改成：legacy Kirin 990 上
-把这次拒绝当非致命，记录警告后照常按已分配的 pool 数继续。TA 镜像加载路径
-不用 mailbox，先不阻塞；真正要用 agent（mailbox）时再补 vendor 注册协议。
+`mailbox_buffer[]` 数组。在 legacy Kirin 990 上照 vendor 协议注册 pool 0 现在
+**成功**（`-- mailbox_register: wish to register 8 mailbox, success 8`，
+`mailbox_init: legacy mailbox register ret=0`，见 `8979446bf`）。注意：不注册
+mailbox 时，TEEOS 会在 `load_image_by_frame` 里 `gtask` 的 `memcpy` 中缺页。
 
-下一轮建议：
+### 6.8 TA 镜像已能加载；open session 卡在 AUTH_ENHANCE（`8979446bf`）
 
-1. 用 `52ea66282` + `3ee085bab` 干净启动，观察 `NEED_LOAD_APP` 是否终于被完成
-   （`out_bitmap` 置位、`fingerprint_daemon` 不再重试 TA 加载）；
-2. 若仍不完成，怀疑 `nsid/vmid` 虽丢弃但驱动内部 agent 路由或 `SET_SERVE_CMD`
-   仍依赖它们，用 `proc_tc_ns_smc`/`smc_show_cmd_bitmap` 打印真实队列条目；
-3. 若 TA 能加载但 invoke 失败，多半就是 `CONFIG_AUTH_ENHANCE` 的
-   `token_phys/params_phys`：4.19 用户态把 token 放在 context 的 `0xe8`，
-   需要让 4.19 ABI 层把它转成 wire 的两个 phys 字段。
+修完 queue 之后，TEEOS 才真正开始处理用户态命令，接连暴露出两个 legacy
+不兼容点：
+
+1. **mailbox 注册**（6.7）：按 vendor 协议注册 `MAILBOX_POOL_SIZE` 连续池，
+   两个参数都用 `VALUE_INPUT`。
+2. **TA 加载 paramtypes**：4.19 的 `LOAD_SECURE_APP` operation 用的是
+   **`0x1627`**（`load_image_by_frame` 反汇编 @ `ffffff8008dfde94`：
+   `MEMREF_TEMP_INOUT, VALUE_OUTPUT, MEMREF_TEMP_OUTPUT, VALUE_INPUT`），
+   既不是 6.18 的 `0x3605` 也不是 openEuler 源码的 `0x1635`。
+
+实测（6.18 + UOS 用户态）：`/vendor/bin/teecd` + `fingerprint_daemon` 起来后，
+1.3 MiB 的指纹 TA 分两帧全部 `ret=0` 加载成功，接着发 `GLOBAL_CMD_ID_OPEN_SESSION`
+（cmd 2）。但它返回：
+
+```text
+post_proc_smc_return: smc call ret 0xffff0000, cmd ret val 0xffff0000, origin 3
+proc_open_session: smc call returns error, ret=0xe
+tc_client_419_session_ioctl: 4.19 open session failed ret is 14
+```
+
+`0xffff0000 == TEE_ERROR_GENERIC`。反汇编 4.19 的 `load_security_enhance_info`
+（`ffffff8008df5ac4..8df5bc4`）可见：当 `cmd_id == GLOBAL_CMD_ID_OPEN_SESSION`
+时，4.19 会设置 `token_phys@77`/`token_h_phys@81`（来自 4.19 CA token）和
+`params_phys@89`/`params_h_phys@93`（加密后的 session secure params），而我们的
+wire 结构这两处仍发 0。所以下一个要移植的是 `CONFIG_AUTH_ENHANCE`：
+
+- 用户态 `libteec`/`teecd` 已经把 token 放在 4.19 context 的私有区里
+  （`append_teec_token`，`ffffff8008df6030`），需要在 4.19 ABI 转换时把它
+  映射到 wire 的 `token_phys/token_h_phys`；
+- `params_phys/params_h_phys` 来自内核 `generate_encrypted_session_secure_params()`
+  （openEuler 源码 `auth/security_auth_enhance.c`），需要实现同一套 session
+  密钥/加密流程，否则 TEEOS 不肯开 session。
+
+在 `8979446bf` 之前的所有观察都建立在“错位 out[] 永远返回 0”的假象上；
+现在队列、mailbox、TA 加载三块已是真实通过，后续调试请以 TEEOS 真实返回值
+为准。
 
 ## 7. 验证与诊断测试
 
