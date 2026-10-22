@@ -517,6 +517,50 @@ wire 结构这两处仍发 0。所以下一个要移植的是 `CONFIG_AUTH_ENHAN
 现在队列、mailbox、TA 加载三块已是真实通过，后续调试请以 TEEOS 真实返回值
 为准。
 
+### 6.9 AUTH_ENHANCE：root key 与 session key 已打通（`7cc2d349e`）
+
+用 kprobe 在 UOS 4.19 上抓 `tc_ns_smc`，得到 vendor 对三种命令实际填的字段：
+
+| cmd | 类型 | operation | login | token | params |
+|---|---|---|---|---|---|
+| `0x16` GET_SESSION_SECURE_PARAMS | global | 0 | 0 | 0 | ✅ |
+| `0x02` OPEN_SESSION | global | ✅ | ✅ | ✅(42B) | ✅(80B+IV) |
+| TA invoke（`0x37/0x3b/0x3c` 等） | TA | ✅ | 0 | ✅ | 0 |
+
+**root key 的来源**：不是单独 SMC，而是 `smc_context_init()` 把命令缓冲区
+物理地址交给 TEEOS（SMC `0xb2000008`）后，TEEOS 把 48 字节（AES-256 key 32 +
+IV 16）写在 `g_cmd_data->in[0] + 4`，即 legacy magic `0` 之后。4.19 的
+`get_session_root_key()`（`ffffff8008df6d50`）就是从 `cmd_data + 0x24` 拷 48
+字节再把 `in[]` 清零。实测 6.18 启动时该处确实是 `0, <32 字节随机>, 0,0,0`，
+和 4.19 完全一致。`parse_params_from_tee()` 现在在 memset 之前把它存下来。
+
+**session key 交换**：`core/auth_enhance.c` 实现
+
+1. `GLOBAL_CMD_ID_GET_SESSION_SECURE_PARAMS`（0x16）：随机 challenge word，
+   放进 `session_secure_params`，用 `params_phys` 发给 TEEOS；TEEOS 返回用
+   root key 加密的 blob，AES-256-CBC 解密（IV 在密文尾部 16 字节），得到
+   `scrambling[3]` 和 `crypto_info`（session key + IV）。
+2. 开 session 时：`token_phys` 指向 42 字节全 0，`params_phys` 指向“challenge
+   用 session key 加密”的 96 字节 blob。
+
+注意：`CONFIG_PAGES_MEM` 的 mailbox 是 `ioremap_cache` 的，`skcipher` 在它上面
+`flush_dcache_page()` 会拿到无效 `struct page` 直接 oops；所以加解密都要先拷到
+普通 `kmalloc` 缓冲再交给 skcipher。
+
+实测：root key 已装入，0x16 成功且回包能解密，open session 的
+`op/token/params` 已和 vendor 一致（6.18：`op=0x14403000 tok=0x144030b8
+params=0x144030e2`；UOS：`op=0x1200b000 login=0x1200b078 tok=0x1200b0e8
+params=0x1200b112`）。但 TEEOS 仍回 `TEE_ERROR_GENERIC`，差别是
+**`login_data_phy=0`**。
+
+**下一步（CA 认证）**：vendor 的 `need_check_login()` 要求
+`pub_key_len == sizeof(uint32_t)`，并由 `check_login_for_encrypt()` 把
+`sess->auth_hash_buf` 用 session key 做 `do_encryption()`（带 encryption head
+和 CMS padding）后放 `login_data`，长度 64。4.19 teecd 通过 CA 身份/证书
+ioctl 设置 `pub_key_len`（我们的 4.19 ABI 层还没转这个 ioctl），且 6.18 的
+`auth_hash_buf` 布局（64 字节裸 hash）和 vendor（112 字节含 head/IV）不同。
+所以还剩：\*\*4.19 CA 证书 ioctl 兼容 + auth_hash 的 AUTH_ENHANCE 加密格式\*\*。
+
 ## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
