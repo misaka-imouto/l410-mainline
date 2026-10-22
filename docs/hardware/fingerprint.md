@@ -599,6 +599,42 @@ CA hash、params[2]=4B、params[3]=27B 全部和 UOS 一致，但 TEEOS 仍回
 `default` 分支当成 invalid 丢掉了。下一步：在 client 节点上兼容 4.19 的
 `SET_NATIVECA_IDENTITY`，把 CA hash 注册给 TEEOS，再试 open。
 
+### 6.11 open session 已打通；invoke 还差 token 同步（`7c7dcebdb`）
+
+用 kprobe 抓 UOS 的 `tc_client_ioctl` 发现 teecd 的真实顺序是
+`7415(GET_TEE_VERSION) → 7412(SET_NATIVECA_IDENTITY) → 7411 → 740e(LOGIN)`，
+而 6.18 一直跳过 7412。继续反汇编 teecd（`0x2f08 set_native_identity`）发现
+它会先读 **`/vendor/etc/native_packages.xml`**，读成功才 `ioctl(0xc0047412)`。
+6.18 根上缺这个 2752 字节的二进制 native CA 数据库，所以 teecd 直接返回。
+从 UOS 的 `/dev/sdd5` 只读拷过去后：
+
+```bash
+sudo mount -o ro /dev/sdd5 /mnt/uosro
+sudo mkdir -p /vendor/etc
+sudo cp /mnt/uosro/vendor/etc/native_packages.xml /vendor/etc/
+```
+
+再把 **`GET_TEE_VERSION` 和 `SET_NATIVECA_IDENTITY` 都加到 client 节点**
+（`tc_client_ioctl`），teecd 就会发 `SET_CA_HASH`(0x13)。
+
+**结果：open session 终于成功**（teecd → SET_CA_HASH → daemon open），
+daemon 进入 invoke。接着 invoke 从 `TEEC_ERROR_INVALID_CMD(0x1)` 变成
+`TEE_ERROR_GENERIC`，又补了三处 TA ABI：
+
+1. vendor 枚举 `CMD_TYPE_TA=0 / CMD_TYPE_GLOBAL=1`，而我们是相反的；
+   global 之前已映射，TA 也要 `1 → 0`；
+2. TA 命令的 `operation_phys`/`pid` 要用 session 的 `scrambling[1]` 做 XOR
+   （vendor `update_chksum()`），否则 TEE 在错的物理地址读 operation；
+3. TA 命令要带 42 字节 AUTH_ENHANCE token：open 响应里的 token 存进
+   `session->teec_token`，invoke 时把 libteec 的 16 字节 token（context
+   0x90）合并进去、把 `token[32..39]` 的 scrambling timestamp 递增并标记
+   unsynced。
+
+现在 invoke 已被 TA 识别，但仍回 `TEE_ERROR_GENERIC`。剩下的是
+**token/timestamp 同步的精确性**（`post_process_token`/`sync_timestamp`
+的 DEC 逻辑、`token[40]` 的 kernel_api、以及 operation params 的逐字节
+对齐）。
+
 ## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
