@@ -561,6 +561,44 @@ ioctl 设置 `pub_key_len`（我们的 4.19 ABI 层还没转这个 ioctl），�
 `auth_hash_buf` 布局（64 字节裸 hash）和 vendor（112 字节含 head/IV）不同。
 所以还剩：\*\*4.19 CA 证书 ioctl 兼容 + auth_hash 的 AUTH_ENHANCE 加密格式\*\*。
 
+### 6.10 CA 认证数据已和 UOS 逐字节对齐（`dc6eb92ff`）
+
+用 kprobe 在 UOS 4.19 上抓 `do_encryption` 和 `tc_ns_smc`，把 CA 认证数据
+一项项对齐后，6.18 侧已经和 vendor 完全一致：
+
+1. **CA hash 之前一直是 0**：`calc_client_auth_hash()` 整体在
+   `#ifdef CONFIG_CLIENT_AUTH` 里，而 Makefile 只定义了 `CONFIG_AUTH_HASH`。
+   加上 `-DCONFIG_CLIENT_AUTH` 后，`auth_hash_buf[32..63]` 变成
+   `24 37 ff 6c 70 87 34 30 ...`，和 UOS 抓到的 CA hash **逐字节相同**。
+   同时要修两处 6.18 API：`get_user_pages_remote()` 在 6.5+ 少一个参数；
+   `find_lib_code_area()` 的 `mm->mmap`/`vm_next` 在 6.1+ 要换成
+   `VMA_ITERATOR`/`for_each_vma`。
+2. **去掉 `CONFIG_AUTH_HASH` 和 `CONFIG_AUTH_SUPPORT_UNAME`**（UOS config
+   里没有这两个）：否则 `set_login_information_hash()` 会把 `pkg_name`
+   换成 32 字节 digest，`pub_key` 变成用户名。去掉后 `pkg_name` 是 CA 路径
+   （`/usr/bin/fingerprint_daemon`，27 字节），`pub_key` 是 uid（4 字节），
+   与 UOS 的 `do_encryption` 输入（payload 28 / 5）一致。
+3. **login_data 加密**：`auth_enhance_encrypt_login_info()` 做
+   `AES-CBC(head || 64 字节 hash || CMS padding) + IV`，输出 112 字节，
+   `login_data_len` 保持 64。
+4. **open session 的 params[2]/[3] 也要加密**：vendor 的
+   `do_opensess_auth_enhance()` 会把 CA uid / CA 路径用 session key 加密，
+   对应 `auth_enhance_encrypt_open_param()`。
+
+结果：open session 的 `op/login/token/params` 四个 phys、`login_data_len`、
+CA hash、params[2]=4B、params[3]=27B 全部和 UOS 一致，但 TEEOS 仍回
+`TEE_ERROR_GENERIC`（origin COMMS）。
+
+**下一个明确线索**：UOS 的命令流在 open 之前还有一条
+**`GLOBAL_CMD_ID_SET_CA_HASH` (0x13)**，6.18 从未发过（命令序列里只有
+`0x1b/0x17/0x5/0x4/0x2`）。它由 `SET_NATIVECA_IDENTITY` ioctl →
+`tc_ns_set_native_hash()` 触发，而 6.18 只把该 ioctl 放在
+`tc_private_ioctl`（teecd 的 `/dev/tc_private`）；4.19 teecd 是在 client 节点
+（`/dev/tc_ns_client`）上发 `0xc0047415`/`0xc0087411` 等 ioctl 的，所以
+`SET_NATIVECA_IDENTITY` 大概也在 client 节点上被 `tc_client_ioctl` 的
+`default` 分支当成 invalid 丢掉了。下一步：在 client 节点上兼容 4.19 的
+`SET_NATIVECA_IDENTITY`，把 CA hash 注册给 TEEOS，再试 open。
+
 ## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
