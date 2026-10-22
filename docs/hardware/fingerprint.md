@@ -135,6 +135,21 @@ SUBSYSTEM=="huawei_fp", MODE="0660", GROUP="input"
 
 ---
 
+## 5. 6.18 用户态现状与阻塞点（2026-10-22 实测）
+
+内核侧 `/dev/tc_ns_client`、`/dev/fingerprint` 和 TEE TA 加载都已就绪，但**指纹业务还没跑起来**，目前有两个硬阻塞：
+
+1. **`/dev/fingerprint` 不能给 libfprint 提供图像**。这个字符设备只有复位 GPIO、IRQ、`GET_DEVICE_INFO`、`GET_IRQ_STATUS` 等 ioctl，没有图像/模板/匹配接口；SPI1 在安全世界，REE 读不到原始指纹。因此“给 libfprint 写 FPC1020 over /dev/fingerprint 的后端”在这块硬件上不可行，libfprint 需要的是原始图像或厂商匹配服务。
+2. **厂商用户态栈可以复制过来，但 TEE agent 注册被内核拒绝**。UOS 的 `/usr/lib/libfingerprint.so`、`libhwFingerprint.so`、`libteec.so.1`、`/vendor/bin/teecd`、`/system/vendor/bin/a32b3d00-...sec` 和 `fingerprint_daemon`（其实是 DBus `com.huawei.Fingerprint` HAL，不是 Android HIDL）都能读出来。把 `teecd` 放到 `/vendor/bin/teecd`、带上 UOS 的 `libssl.so.1.1`/`libcrypto.so.1.1` 后，它能通过 `check_teecd_auth` 的路径/UID 检查，但随后在 `TC_NS_CLIENT_IOCTL_REGISTER_AGENT` 上失败：
+
+   ```text
+   [tzdriver] (teecd)ioctl_register_agent: the agent is not access
+   ```
+
+   根因是 6.18 的 `drivers/tee/itrustee/tzdriver_internal/whitelist/agent_allowed_ca.c` 里 `g_allowed_ext_agent_ca[]` 是空数组，任何外部 agent 都过不了 `is_allowed_agent_ca()`。4.19 厂商内核里同名表有内容；需要从本地 `kernel-image-4.19.71` + `System.map-4.19.71` 里把表项（路径、UID、agent ID）解出来，或先临时允许 `teecd`/`fingerprint_daemon` 的路径做 bring-up。
+
+修好 agent 白名单后，剩下的工作是：启动 `/vendor/bin/teecd` 和 `/opt/uos-fp/bin/fingerprint_daemon`，确认 DBus `com.huawei.Fingerprint` 出现，再用 `pam_exec` 或一个小的 PAM 模块调用它的 Identify 接口。`system/fingerprint/` 里的 udev 规则和服务文件已经准备好，只缺这两个二进制和 TEE 白名单。
+
 ## 5. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：

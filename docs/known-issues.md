@@ -27,6 +27,7 @@
 - UFS：`rpm_lvl=5`（运行时让器件断电）恢复后第一次 auto-hibern8 退出会失败一次，170 ms 后自动恢复。默认的 `rpm_lvl=1` 碰不到。
 - WiFi：开机校准偶尔要 9 秒；蓝牙串口（BUART）走 PIO，没有 DMA；驱动不能卸载；PCIe RC1 一旦 completion timeout 不会自己恢复。
   NetworkManager 每次连接时第一次 connect 会被拒，重扫后成功，多花约 1 秒。
+- 指纹：内核节点、TA 加载都正常，但 PAM 还不可用。`/dev/fingerprint` 没有图像/匹配接口，不能直接写 libfprint 后端；厂商 `teecd`/`fingerprint_daemon` 已能复制到 Debian，但 6.18 tzdriver 的外部 agent 白名单是空的，`TC_NS_CLIENT_IOCTL_REGISTER_AGENT` 被拒绝。见 [hardware/fingerprint.md](hardware/fingerprint.md)。
 - 音频：耳机插拔和线控需要人工验证；每次时钟启停后功放会锁存一个时钟错误位（不影响出声）；
   流开始时功放比 I2S 时钟早约 10 ms 上电（声音是淡入的，听不出来）。
   **功放有板型差异**：`KLVU-WDU0B` 是 TAS2562（I2C 0x4c/0x4e），`KLVU-WDU0` 是 CS35L36（0x50/0x52）。6.18 两种都支持，card 按实际 probe 成功的那一对创建扬声器 link；当前远程 `L410 KLVU-WDU0` 的 CS35L36 已实测出声。CS35L36 的内部 PLL 可能显示未锁定，只打在 debug 级别。见 [hardware/audio.md](hardware/audio.md)。
