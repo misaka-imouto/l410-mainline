@@ -332,27 +332,53 @@ cmd_id  = 2      login.method = 7      param_types = 0x1
 
 - 不是 ioctl ABI（6.1 的栈已经进到 `tc_ns_open_session`）；
 - 不是结构体尾部（0x90/0x98 保留、`file_size`/`file_buffer` 映射都正确）；
-- 不是 `nsid`/`vmid`：把 `proc_tc_ns_smc()` 里对 legacy Kirin 990 的
-  `nsid`/`vmid` 清零后，`NEED_LOAD_APP` 依旧不完成（实验已回滚，代码未入库）；
+- 不是 `nsid`/`vmid`：清零后 `NEED_LOAD_APP` 依旧不完成（实验已回滚，代码未入库）；
 - 不是 `paramtypes`：4.19 的同一命令用 `TEEC_MEMREF_TEMP_INOUT` / `TEEC_VALUE_OUTPUT`，
   与 6.18 完全一致（反汇编逐条比对过）；
-- 不是 mailbox 池：4.19 和 6.18 都是 4 KiB 参数页 + `mb_cmd_pack`。
+- 不是 mailbox 池：4.19 和 6.18 都是 4 KiB 参数页 + `mb_cmd_pack`；
+- 不是 `tc_ns_smc_cmd` 本身：见 6.5 的逐字段对比，把 `cmd_type`/`nsid`/`vmid`
+  全对齐到 4.19 的取值后仍然卡住。
 
-下一步建议按这个顺序试：
+### 6.5 对照实验：`tc_ns_smc_cmd` 字段逐项对比（4.19 vs 6.18）
 
-1. 抓 4.19 上 `NEED_LOAD_APP` 发出去的 **SMC 队列条目原始字节**（kprobe
-   `smp_smc_send`/`tc_ns_smc` 入口 dump 共享内存页），和 6.18 的逐字节 diff。
-   4.19 的 `struct tc_ns_smc_cmd` 里 `cmd_type` 是 **u8**，6.18 是 **u32**（尾部
-   `nsid`/`vmid`/`eventindex`/`res_int[3]`/`started` 也是 6.18 新加的），虽然驱动是
-   把字段抄进共享队列、理论上只看队列布局，但 queue entry 的字段偏移值得重新核对一遍。
-2. 重点看 `uid` / `ca_pid` / `pid` 这三个字段：6.18 的手搓全局命令
-   （`tc_ns_get_tee_version()`、`tc_ns_need_load_image()`）不填它们，而
-   `gp_ops` 里的会话命令会填。试试把它们按 `gp_ops` 的方式填上。
-3. 检查 `init_for_smc_send()` 分配的队列槽位：`event_nr` 被当作“命令索引”复用，
-   TEE 可能只对 `out_bitmap` 里的槽位置位；如果用户态命令拿到的槽位和
-   `cmd_monitor` 记录的索引不一致，就会出现“TEE 完成了、驱动看不到”的假死。
-4. 用 `GLOBAL_CMD_ID_DUMP_SRV_SESS` (0x25) 或 `dump_services_status()` 这类已有
-   调试入口确认 TEE 侧到底有没有看到这条命令。
+用 kprobe（4.19）和临时 hexdump（6.18，`proc_tc_ns_smc()`）抓同一条
+`NEED_LOAD_APP` 交给 `tc_ns_smc()` 的结构体，字段级对比结果：
+
+| 字段 | 4.19（真机） | 6.18（原样） | 6.18（对齐后） |
+|---|---|---|---|
+| `cmd_type` | **1** | 0（`CMD_TYPE_GLOBAL`） | 1 |
+| `cmd_id` | 5 | 5 | 5 |
+| `dev_file_id` | 8 | 6/8（取决于开 fd 顺序） | 同 |
+| `context_id` / `agent_id` | 0 / 0 | 0 / 0 | 0 / 0 |
+| `operation_phys` / `_h_phys` | 0x1200b000 / 0x8 | 0x14403000 / 0x1 | 同 |
+| `login_*`、`err_origin`、`event_nr` | 全 0 | 全 0 | 全 0 |
+| `uid` / `ca_pid` / `pid` | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| `nsid` | 0（该偏移已在其结构体之外） | **0xEFFFFFFC**（`PROC_PID_INIT_INO`） | 0 |
+| `vmid` / `eventindex` / `started` | 0 | 0 | 0 |
+
+把 6.18 的 `cmd_type` 改成 1、`nsid`/`vmid` 清零之后，结构体**已经和 4.19 完全一致**，
+但 `NEED_LOAD_APP` 依旧永不完成。结论：**问题不在 `tc_ns_smc_cmd`，而在
+`smp_smc_send()` 把它送进共享内存队列的那一层**（队列条目布局 / `in_bitmap`
+槽位分配 / `event_nr` 复用 / SMC 寄存器参数）。两个已知的 ABI 级差异先记在这里：
+
+- 4.19 的 `struct tc_ns_smc_cmd` 里 `cmd_type` 是 **u8**（`cmd_id` 在 +17），
+  6.18 是 **u32**（`cmd_id` 在 +20），尾部 6.18 还多了
+  `nsid`/`vmid`/`eventindex`/`res_int[3]`/`started`。**如果队列条目是直接 memcpy**
+  结构体，字段就会整体错位 —— 这值得优先验证（对比 4.19 和 6.18
+  `smp_smc_send()` 里往 `g_cmd_data->in[]` 写字段的偏移）。
+- 4.19 全局命令的 `cmd_type` 是 **1**，6.18 的 `CMD_TYPE_GLOBAL` 是 **0**。
+
+下一步建议（按性价比排序）：
+
+1. 在 `smp_smc_send()` 里打印/对比真正写进共享内存的那个队列条目（不是
+   `tc_ns_smc_cmd`）。4.19 的 `struct tc_ns_smc_queue` 布局可以从
+   `kernel-image-4.19.71` 反汇编 `smp_smc_send`（`ffffff8008dfa530`）确认。
+2. 对齐 `cmd_type`（Kirin 990 上全局命令发 1）——单独改没有解决问题，但和上面那条一起
+   才是 4.19 的真实线上字节。
+3. 检查 `init_for_smc_send()` 的槽位分配与 `event_nr`（6.18 把 `event_nr` 当命令索引
+   复用），以及 `out_bitmap`/`in_bitmap` 的位序是否和 TEEOS 一致。
+4. 用 `GLOBAL_CMD_ID_DUMP_SRV_SESS` (0x25) 之类已有调试入口，确认 TEE 侧到底有没有
+   收到这条命令（如果 TEE 收到但不回，方向是握手/权限；如果 TEE 根本没收到，就是队列）。
 
 在这之后才是：确认 DBus `com.huawei.Fingerprint`、把 `deepin-authenticate`/PAM 接上。
 
