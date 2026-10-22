@@ -154,11 +154,12 @@ m_env() {
 	local p=/sys/class/dmi/id
 	info env.kernel "$(uname -r), $(uname -v)"
 	info env.cmdline "$(rd /proc/cmdline)"
-	if [ "$(rd $p/product_name)" = "L410 KLVU-WDU0B" ]; then
-		pass env.dmi "$(rd $p/sys_vendor) $(rd $p/product_name), serial $(rd $p/product_serial), BIOS $(rd $p/bios_version) ($(rd $p/bios_date)), EC $(rd $p/ec_firmware_release)"
-	else
-		fail env.dmi "product '$(rd $p/product_name)', want 'L410 KLVU-WDU0B' (SMBIOS not parsed?)"
-	fi
+	case "$(rd $p/product_name)" in
+	"L410 KLVU-WDU0B"|"L410 KLVU-WDU0")
+		pass env.dmi "$(rd $p/sys_vendor) $(rd $p/product_name), serial $(rd $p/product_serial), BIOS $(rd $p/bios_version) ($(rd $p/bios_date)), EC $(rd $p/ec_firmware_release)" ;;
+	*)
+		fail env.dmi "product '$(rd $p/product_name)', want 'L410 KLVU-WDU0' or 'L410 KLVU-WDU0B' (SMBIOS not parsed?)" ;;
+	esac
 	local b=/sys/class/power_supply/echub-battery t="" z
 	info env.power "AC online=$(rd /sys/class/power_supply/echub-ac/online), battery $(rd $b/capacity)% $(rd $b/status), l410_perf $(rd /sys/kernel/l410_perf/mode), tuned $(tuned-adm active 2> /dev/null | sed 's/.*: //')"
 	for z in /sys/class/thermal/thermal_zone*; do t="$t $(rd $z/type)=$(($(rd $z/temp) / 1000))"; done

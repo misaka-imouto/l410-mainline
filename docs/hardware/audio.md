@@ -14,11 +14,24 @@ L410 的声卡由四部分组成：外置 codec 海思 Hi6405，把 codec 接到
 | 电源 | ASP 子系统是 IP 调压器 `ip@14 "asp"`（经 ATF SMC），SLIMbus 用 `slimbus-reg-supply`，ASP DMA 用 `asp-dmac-supply` |
 | SLIMbus | Cadence SLIMbus manager（CSMI），在 ASP 里 `0xfa550000`，codec 是唯一的从设备（枚举到 5 个设备）。放音时时钟场景 CG_8/SM_4，平时 CG_10/SM_2 |
 | ASP DMA | `0xfa54b000`，GIC SPI 248。PL08x 风格的通道，每个 SLIMbus 端口一条单声道 32 位（24 位左对齐）通道，LLI 乒乓。缓冲必须在 HiFi 数据保留区 `0x26780000`（ASP 总线能访问的地方） |
-| 功放 | 两颗 TAS2562，I2C3 地址 0x4c（左）/0x4e（右），I2S 接 Hi6405 的 S4（I2S4）口，32 位槽宽，关断 GPIO241（gpio30@fa8b2000 第 1 脚）两颗共用 |
+| 功放 | **板型不同**：KLVU-WDU0B 是两颗 TAS2562，I2C3 地址 0x4c（左）/0x4e（右）；KLVU-WDU0 是两颗 CS35L36，I2C3 地址 0x50（左）/0x52（右）。两组都接 Hi6405 的 S4（I2S4）口，关断 GPIO241（gpio30@fa8b2000 第 1 脚）共用 |
 | 麦克风 | 4 个数字麦（DMIC）进 Hi6405；耳机麦走 HSMIC |
 | 耳机座 | Hi6405 自带 MBHC（插拔和按键），另有 hs-type 选择 GPIO（gpio@fe004000 第 6 脚、gpio@fe005000 第 0 脚） |
 
 不需要 HiFi DSP。L410 的厂商配置是 `codec_without_hifi`：放音、录音由 AP 直接编程 ASP DMA，把 PCM 搬到 SLIMbus 端口；HiFi 只在手机的低功耗、算法场景用。6.18 这边完全不碰 HiFi，不加载 DSP 固件，也不走 IPC。
+
+### 功放板型差异（重要）
+
+固件设备树里同时保留了两套功放节点，实际只焊一套：
+
+| 板型 | DMI product | 功放 | I2C 地址 | 4.19 厂商驱动的探测结果 |
+|---|---|---|---|---|
+| KLVU-WDU0B | `L410 KLVU-WDU0B` | 2× TAS2562 | 0x4c / 0x4e | 0x4c/0x4e 读到 TAS2562 版本寄存器，正常出声 |
+| KLVU-WDU0 | `L410 KLVU-WDU0` | 2× CS35L36 | 0x50 / 0x52 | 0x4c/0x4e 版本读取失败（-242），0x50/0x52 读到 CS35L36 芯片 ID `0x35a36` |
+
+当前远程测试机是 **KLVU-WDU0（BIOS 1.00.75）**：0x4c/0x4e 上没有任何器件（6.18 和厂商 4.19 都 NAK），0x50/0x52 才是 CS35L36。因此本仓库的 TAS2562 代码在这台机器上无法出声，也不能用这台机器验证 TAS2562 的改动；本文后面关于 TAS2562 的寄存器、爆音、IDC 阈值等内容都来自 WDU0B。
+
+6.18 现在会在 TAS2562 probe 时先做厂商同样的复位（GPIO241 低 3 ms、拉高后等 100 ms）再读版本寄存器；读不到就返回 `-ENODEV`，card 再确认两颗功放都真的存在才创建扬声器 DAI link。这样在 WDU0 上声卡仍能注册（耳机、麦克风可用），只是没有扬声器，也不会再刷 `-121`。WDU0 的 CS35L36 支持还没做，见下文已知问题。
 
 ## 驱动结构
 
@@ -105,6 +118,7 @@ sudo alsactl store
 
 - INT_LTCH0 bit2 是 TDM 时钟错误：I2S 时钟起停前后功放还在工作就会锁存。播放中实时寄存器为 0，所以测试里只报告、不算失败。真正的故障是过温/过流（bit0/1）和欠压/过压/brown-out（0x25 bit1-3）。这个锁存位读了不清零（要写 INT_CLK 0x30 的 INT_CLR_LTCH），所以 `amps` 里一直显示 0x04。
 - 时钟错误持续超过 CLK_HALT_TIMER（INT_CLK 默认 52 ms）后，功放自己进入关断（PWR_CTRL 读回 0x0e），时钟恢复了也不会自己醒，要等下一次 DAPM 上电。厂商的 smartpakit 有中断处理，会重新初始化功放；6.18 没有。
+- **KLVU-WDU0 的 CS35L36 功放还没有 6.18 驱动**：当前只支持 WDU0B 的 TAS2562。WDU0 上 6.18 会跳过扬声器 link，扬声器无声；要用扬声器需要给 0x50/0x52 接主线的 `cs35l36` 驱动（32 位寄存器、`VA`/`VP` 电源、GPIO274/275 中断、每颗的 channel mux 和厂商的 boost 参数），再让 card 按实际焊的板型选 DAI link。
 - 采样率本身没问题：播放中 TDM_DET = 0x24（48 kHz，64 fs），PipeWire 没有 xrun（`pw-top` ERR = 0）。
 
 ## 检查方法

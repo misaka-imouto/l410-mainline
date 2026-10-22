@@ -111,7 +111,7 @@
 
 | ID | 内容 | 判定 |
 |---|---|---|
-| env.dmi | SMBIOS 型号、序列号、BIOS、EC 版本 | 型号是 `L410 KLVU-WDU0B` |
+| env.dmi | SMBIOS 型号、序列号、BIOS、EC 版本 | 型号是 `L410 KLVU-WDU0`（CS35L36 功放）或 `L410 KLVU-WDU0B`（TAS2562 功放） |
 | env.kernel / cmdline / power / temps / uptime | 内核版本、命令行、AC 与电量、档位、各温区、开机时长 | 记录 |
 
 ### sys：系统与启动

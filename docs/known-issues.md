@@ -29,6 +29,7 @@
   NetworkManager 每次连接时第一次 connect 会被拒，重扫后成功，多花约 1 秒。
 - 音频：耳机插拔和线控需要人工验证；每次时钟启停后功放会锁存一个时钟错误位（不影响出声）；
   流开始时功放比 I2S 时钟早约 10 ms 上电（声音是淡入的，听不出来）。
+  **功放有板型差异**：`KLVU-WDU0B` 是 TAS2562（I2C 0x4c/0x4e），`KLVU-WDU0` 是 CS35L36（0x50/0x52）。当前远程机是 `L410 KLVU-WDU0`，没有 TAS2562；6.18 会跳过扬声器 link，耳机和麦克风仍可用，扬声器要等 CS35L36 支持。见 [hardware/audio.md](hardware/audio.md)。
 - Chromium：在信息流很重的网页（例如 bilibili 首页）上极快滚动约 49 到 50 fps。原因在网页自己的主线程
   （追加卡片时 85 到 290 ms 的布局、长 JS 定时器），以及 Chromium 的 Wayland 帧回调节流；合成器和 GPU 都有余量。
   Firefox 在同样的页面上 58 到 60 fps。见 [tuning/desktop.md](tuning/desktop.md)。
