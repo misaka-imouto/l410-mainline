@@ -186,9 +186,25 @@ agent ID 和 6.18 一致，buffer 都是 4 KiB。关键差异在调用路径：
 - 4.19 的 `function_graph` 里，`tc_ns_register_agent()` 只做 `vm_mmap()` / `remap_pfn_range()` 等 buffer 映射，**没有从 teecd 线程直接调用 `tc_ns_smc`**；
 - 6.18 的 `tc_ns_register_agent()` 在同一个线程里同步调用 `register_agent_to_tee()` → `tc_ns_smc()`。
 
-也就是说 4.19 走的是异步 SMC 队列 / `smc_svc_thread` 路径，6.18 改成了同步直发。TEE 很可能只接受队列线程发出的 agent 注册命令，或者同步直发时缺少队列路径才会填的字段（`event_nr`、`dev_file_id`、`ca_pid` 等）。这比单纯改 `GLOBAL_CMD_ID_REGISTER_AGENT` 的 `cmd_id` 更可能解释“命令一直不完成”。
+进一步用 function_graph + kprobe 确认：4.19 的用户态 agent 注册**根本不需要发 `GLOBAL_CMD_ID_REGISTER_AGENT`**，TEE 侧已经由 TA 声明；6.18 的同步直发是多余且会让 Kirin 990 TEE 一直不置完成位。把 6.18 的 `tc_ns_register_agent()` 改成对 `user_agent == true` 跳过 `register_agent_to_tee()` 后，`teecd` 立即能起来：
 
-下一步应该抓 4.19 `smp_smc_send`/`smc_svc_thread` 实际发送的 `tc_ns_smc_cmd`（在队列线程里），和 6.18 `register_agent_to_tee()` 填的结构逐字段 diff；或者把 6.18 的 agent 注册改回 4.19 的异步队列路径。
+```text
+send_event_response: agent 0x4c4f4144 ... sends answer back
+send_event_response: agent 0x4d495343 ... sends answer back
+send_event_response: agent 0x46536673 ... sends answer back
+```
+
+### 下一个阻塞：4.19 用户态 ABI 与 6.18 内核不一致
+
+`teecd` 能起来之后，直接启动 UOS 的 `fingerprint_daemon` 失败：
+
+```text
+fingerprint_dae: tc_client_agent_ioctl: invalid cmd 0x40b07401!
+```
+
+`0x40b07401` 是 4.19 的 `TC_NS_CLIENT_IOCTL_SES_OPEN_REQ`，编码里的结构大小是 `0xb0`。6.18 的 `struct tc_ns_client_context` 只有 `0x98`，所以 `_IOW('t', 1, struct tc_ns_client_context)` 算出来的 ioctl 号不同，`tc_client_ioctl()` 的 switch 不认，落到 agent ioctl 分支。`teecd` 的 `GET_TEE_VERSION`（`0xc0047415`）也遇到同类问题。
+
+因此要让 UOS 的 `libteec`/`fingerprint_daemon` 直接跑，需要在 6.18 内核里加 4.19 的 ioctl ABI 兼容层（接受 `0xb0` 的 context 并转换到 6.18 结构），或者重新编译一个 6.18 原生 `libteec`/HAL。下一步优先做前者：只兼容 `SES_OPEN`/`SES_CLOSE`/`SEND_CMD`/`GET_TEE_VERSION`/`WAIT_EVENT` 这几个 HAL 实际用到的命令。
 
 在这一步之后，才是启动 `/vendor/bin/teecd` 和 `/opt/uos-fp/bin/fingerprint_daemon`，确认 DBus `com.huawei.Fingerprint`，再做 PAM。`system/fingerprint/` 里的 udev 规则和服务文件已经准备好。
 
