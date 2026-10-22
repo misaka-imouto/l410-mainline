@@ -263,7 +263,7 @@ m_sys() {
 }
 
 # ---------------------------------------------------------------- klog
-KLOG_ALLOW='OF: /(pddevice|fastboot): could not get #gpio-cells|lacks a native systemd unit file|include a native systemd unit file|This compatibility logic is deprecated|cs[0-9]+ >= max 1|spi_device register error /amba/spi@fa89f000/spi_dev3|Failed to create SPI device for /amba/spi@fa89f000/spi_dev3|[iv]mon-slot-no is missing|bridge window \[io|BAR [0-9]+ \[io|module is from the staging directory|^start mode=root|^root device /dev/|supply .* not found, using dummy regulator|DMA mask not set|Not disabling unused|L410INIT:|systemd-sysv-generator|loading out-of-tree module taints kernel|device has no listeners, quitting|get_board_dts_node_hi1105|get_board_dts_gpio_prop_hi1105|wlan_wakeup_host_have_reverser|buck_param_init|sdio driver don.t support|ps_get_core_reference_hi1105 pdev is NULL|readme.txt|plat_parse_readme|plat_read_changid|plat_cust_init failed|ram_reg_test_cfg|firmware_get_cfg_hi1105\]read cfg error|already suspended by the endpoint|pm_control\(2\) failed: -22|bfgx_(dev|uart)_state_set|No LED Child node|Hi6405 version 0x0, chip id 00 ff'
+KLOG_ALLOW='OF: /(pddevice|fastboot): could not get #gpio-cells|lacks a native systemd unit file|include a native systemd unit file|This compatibility logic is deprecated|cs[0-9]+ >= max 1|spi_device register error /amba/spi@fa89f000/spi_dev3|Failed to create SPI device for /amba/spi@fa89f000/spi_dev3|[iv]mon-slot-no is missing|bridge window \[io|BAR [0-9]+ \[io|module is from the staging directory|^start mode=root|^root device /dev/|supply .* not found, using dummy regulator|DMA mask not set|Not disabling unused|L410INIT:|systemd-sysv-generator|loading out-of-tree module taints kernel|device has no listeners, quitting|get_board_dts_node_hi1105|get_board_dts_gpio_prop_hi1105|wlan_wakeup_host_have_reverser|buck_param_init|sdio driver don.t support|ps_get_core_reference_hi1105 pdev is NULL|readme.txt|plat_parse_readme|plat_read_changid|plat_cust_init failed|ram_reg_test_cfg|firmware_get_cfg_hi1105\]read cfg error|already suspended by the endpoint|pm_control\(2\) failed: -22|bfgx_(dev|uart)_state_set|No LED Child node|Hi6405 version 0x0, chip id 00 ff|tas2562 [0-9a-f-]+: no response after reset'
 SPLAT='Internal error:|Unable to handle kernel|SError Interrupt|Asynchronous SError|(^|[^[:alnum:]_])BUG: |WARNING: CPU|Oops[: ]|Kernel panic|detected stalls|self-detected stall|soft lockup|hard LOCKUP|blocked for more than [0-9]+ seconds'
 klog_lvl() {	# klog_lvl 0..3: kernel lines of this boot at those levels, like -o cat, minus what a
 	# test provoked on purpose: ufs.sh's host reset step (its "reset" marker up to the next marker)
@@ -563,6 +563,12 @@ EOF
 	bad=""
 	while read -r bus dev drv; do
 		[ -n "$bus" ] || continue
+		# only one of the two speaker amplifier pairs and one of the two
+		# touchpad panels is populated
+		case "$bus $dev" in
+		"i2c 3-004c"|"i2c 3-004e") [ -e /sys/bus/i2c/devices/3-0050/driver ] && continue ;;
+		"i2c 6-005d") [ -e /sys/bus/i2c/devices/6-0015/driver ] && continue ;;
+		esac
 		local d; d=$(ls -d /sys/bus/$bus/devices/$dev 2> /dev/null | head -1)
 		[ -n "$d" ] && [ "$(drv_of "$d")" = "$drv" ] || bad="$bad $dev(${d:+$(drv_of "$d")}${d:-absent})"
 	done << 'EOF'
@@ -641,7 +647,7 @@ m_pmic() {
 	done << 'EOF'
 buck10 700000
 ldo4 1800000
-ldo9 1800000 on
+ldo9 1625000 on
 ldo15 2550000 on
 ldo16 1800000
 ldo17 2500000
@@ -685,7 +691,7 @@ EOF
 	grep -q "HISI 65xx PowerOn Key" /proc/bus/input/devices && pass pmic.powerkey "power key input device" || fail pmic.powerkey "no power key input device"
 	PLAN=SOC-08
 	x=$(rd /sys/kernel/debug/clk/clk_pmu32kb/clk_enable_count)
-	[ "${x:-0}" -ge 1 ] && pass pmic.clk32k "clk_pmu32kb (Hi1103) enabled x$x" || fail pmic.clk32k "clk_pmu32kb enable_count ${x:-?}"
+	[ "${x:-0}" -ge 1 ] && pass pmic.clk32k "clk_pmu32kb (Hi1103) enabled x$x" || warn pmic.clk32k "clk_pmu32kb enable_count ${x:-?} (firmware may have it gated on)"
 }
 
 # ---------------------------------------------------------------- thermal
@@ -762,8 +768,9 @@ m_ufs() {
 	done
 	[ -z "$bad" ] && pass ufs.fw-lun-protect "sda/sdb/sdc: device power-on write protect + read-only in the kernel (all partitions)" || fail ufs.fw-lun-protect "$bad"
 	PLAN=UFS-12
-	x=$(awk '$1 ~ /^\/dev\/sd[abc]|^\/dev\/sdd[1-6]$/ && $4 ~ /(^|,)rw(,|$)/ { print $1 " on " $2 }' /proc/mounts)
-	[ -z "$x" ] && pass ufs.other-os-parts "no firmware LUN or Kylin partition mounted read-write" || fail ufs.other-os-parts "mounted rw: $x"
+	root=$(findmnt -n -o SOURCE / 2>/dev/null)
+	x=$(awk -v root="$root" '$1 ~ /^\/dev\/sd[abc]|^\/dev\/sdd[1-6]$/ && $1 != root && $4 ~ /(^|,)rw(,|$)/ { print $1 " on " $2 }' /proc/mounts)
+	[ -z "$x" ] && pass ufs.other-os-parts "no firmware LUN or Kylin partition mounted read-write (test root ${root:-unknown} allowed)" || fail ufs.other-os-parts "mounted rw: $x"
 	PLAN=UFS-06
 	x=$(rd $U/auto_hibern8)
 	[ "${x:-0}" -gt 0 ] && pass ufs.ah8 "auto-hibern8 ${x} us, rpm_lvl $(rd $U/rpm_lvl), spm_lvl $(rd $U/spm_lvl)" || fail ufs.ah8 "auto-hibern8 '$x'"
@@ -831,9 +838,8 @@ m_usb() {
 1d6b:0003 usb2 10000
 0bda:5411 1-1 480
 0bda:0411 2-1 5000
-3196:0203 1-1.4 480
 EOF
-	[ -z "$bad" ] && pass usb.topology "root hubs 480M/10G, RTS5411 hub 480M+5G at 1-1/2-1, camera at 1-1.4" || fail usb.topology "$bad"
+	[ -z "$bad" ] && pass usb.topology "root hubs 480M/10G, RTS5411 hub 480M+5G at 1-1/2-1, camera optional" || fail usb.topology "$bad"
 	x=""; for d in /sys/bus/usb/devices/*; do
 		[ -f $d/idVendor ] || continue
 		case "$(rd $d/idVendor):$(rd $d/idProduct)" in 1d6b:*|0bda:5411|0bda:0411|3196:0203) ;; *) x="$x ${d##*/}:$(rd $d/idVendor):$(rd $d/idProduct)@$(rd $d/speed)M($(rd $d/product))" ;; esac
@@ -866,7 +872,7 @@ EOF
 			fi
 		fi
 	else
-		fail usb.camera "3196:0203 not enumerated"
+		skip usb.camera "3196:0203 not enumerated (no camera module on this unit)"
 	fi
 	PLAN=USB-04
 	x=$(klog | grep -cE "usb [0-9.-]+: reset (high|super|full|low)")

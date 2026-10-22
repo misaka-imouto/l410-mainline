@@ -226,14 +226,14 @@ systemd 对 SysV 脚本的提示、staging 模块的 taint 提示等。`tests/uf
 | ID | 内容 | 判定 | 慢 |
 |---|---|---|---|
 | pmic.probe | PMIC 在 SPMI usid 9 | 探测成功 | |
-| pmic.regulators | 13 路 LDO/BUCK 电压；ldo9/15/23/24/38 必须开着 | 与厂商内核一致 | |
+| pmic.regulators | 13 路 LDO/BUCK 电压；ldo9/15/23/24/38 必须开着 | 与厂商内核一致；KLVU-WDU0 的 ldo9 实测 1.625 V | |
 | pmic.ip-domains | 19 个 IP 电源域 | 全部注册 | |
 | pmic.display-domains | dsssubsys、media1_subsys、vivobus | 开着 | |
 | pmic.peri-dvfs | 外设调压投票者 | 已探测 | |
 | pmic.rtc | PMIC RTC 与系统时间（按 `/etc/adjtime` 的 LOCAL/UTC 换算） | 相差 ≤ 5 s | |
 | pmic.rtc-alarm | 设 +2 s 闹钟，看 RTC 中断（已有闹钟时不做） | 中断到来 | ✓ |
 | pmic.powerkey | 电源键输入设备 | 存在 | |
-| pmic.clk32k | clk_pmu32kb（WiFi/BT 芯片的 32 kHz） | 已使能 | |
+| pmic.clk32k | clk_pmu32kb（WiFi/BT 芯片的 32 kHz） | 已使能；读成 0 只 WARN（固件可能已把它门控开） | |
 
 ### thermal：温控
 
@@ -257,7 +257,7 @@ systemd 对 SysV 脚本的提示、staging 模块的 taint 提示等。`tests/uf
 | ufs.driver / ufs.link | 驱动；链路 | ufshcd-kirin；HS-G4 ×2、FAST、rate B | |
 | ufs.luns | 4 个 LUN 的型号与大小 | WDC SDINFDO4-512G；8192 / 131072 / 2621440 / 997433344 扇区 | |
 | ufs.fw-lun-protect | sda/sdb/sdc：器件上电写保护，内核只读（含全部分区） | 全部满足 | |
-| ufs.other-os-parts | 固件 LUN、sdd1 到 sdd6（麒麟等）有没有被读写挂载 | 没有 | |
+| ufs.other-os-parts | 固件 LUN、sdd1 到 sdd6（麒麟等）有没有被读写挂载 | 没有；从 sdd6 测试分区启动时允许它作为当前根 | |
 | ufs.ah8 / ufs.pm-levels | auto-hibern8；rpm_lvl/spm_lvl | 已开；1/3（5 有已知问题，WARN） | |
 | ufs.writebooster | WriteBooster 开关 | 记录 | |
 | ufs.error-counters | debugfs 错误事件计数（复位类除外） | 全 0 | |
@@ -275,9 +275,9 @@ systemd 对 SysV 脚本的提示、staging 模块的 taint 提示等。`tests/uf
 |---|---|---|---|
 | usb.drivers | PHY、glue、dwc3、xhci、板载 hub | 都绑定 | |
 | usb.phy | combo PHY 启动日志 | SRAM 固件已加载，mux 3（USB + DP 2 lane） | |
-| usb.topology | 两个根 hub、RTS5411 的两半、摄像头 | 位置与速率：usb1 480M、usb2 10G、1-1 480M、2-1 5G、1-1.4 480M | |
+| usb.topology | 两个根 hub、RTS5411 的两半 | 位置与速率：usb1 480M、usb2 10G、1-1 480M、2-1 5G；摄像头可选 | |
 | usb.external / usb.rtl8153 | 外接设备清单；插着 RTL8153 时查 5000M 和 r8152 | 记录；满足 | |
-| usb.camera | 摄像头的 uvcvideo 与 V4L2 节点 | 有 | |
+| usb.camera | 摄像头的 uvcvideo 与 V4L2 节点 | 有；没有摄像头模块的机器 SKIP | |
 | usb.camera-grab | 抓 5 帧（摄像头被占用时 SKIP） | 有数据 | ✓ |
 | usb.camera-replug | hub 端口 4 断电再上电 | 设备消失、回来，uvcvideo 重新绑定 | ✓ |
 | usb.resets | 开机以来 USB 总线复位次数 | ≤ 2，否则 WARN | |

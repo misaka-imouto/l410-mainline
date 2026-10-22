@@ -31,6 +31,13 @@ underflows() { $S dmesg | grep -c "LDI underflow #" ; }
 # stdin is a pipe that never delivers data.
 main() {
 echo "== kernel $(uname -r), $(date)"
+local sddm_was_active=0
+systemctl is-active --quiet sddm.service && sddm_was_active=1
+cleanup_display() {
+	$S systemctl start getty@tty1.service > /dev/null 2>&1 || true
+	[ $sddm_was_active = 1 ] && $S systemctl start sddm.service > /dev/null 2>&1 || true
+}
+trap cleanup_display EXIT
 
 # ---- test tools ------------------------------------------------------------
 missing=0
@@ -305,7 +312,8 @@ else
 fi
 
 mark "tests done, console back"
-$S systemctl start getty@tty1.service > /dev/null 2>&1 || true
+cleanup_display
+trap - EXIT
 
 n=$(underflows)
 if [ "$n" = 0 ]; then pass no-underflow; else fail no-underflow "$n LDI underflows"; $S dmesg | grep -m3 "LDI underflow" | sed 's/^/   /'; fi
