@@ -711,7 +711,36 @@ smc_cmd/operation（尤其是 `params[0].value` 和 `started`），和 6.18 对�
 以及为什么 6.18 的 TEE 环境下它会挂住。TA 文件 `a32b3d00-...sec` 两边都是
 1361856 字节，加载是完整的。
 
-## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
+### 6.15 打通！缺的是 `/data`（SFS 后备存储）
+
+`fpc_tac_init_lib`（TA cmd 0）本身并不"死"，它是在初始化 **SFS（安全文件系统）**。
+6.18 根上 `/data` 只是一个普通目录（`/data/vendor/log`），**没有挂载数据分区**，
+所以 SFS 没有任何后备存储，TA 就永远完不成 `cmd 0`。
+
+数据分区是 `/dev/sdd7`（`_dde_data`，UOS 里就是 `/data`），里面有：
+
+```
+/data/sec_storage_data/fp/sec_storage_data/fp   <- 指纹 SFS 数据
+```
+
+把 `/dev/sdd7` 挂到 `/data` 后（UUID `a0285613-ad2f-4bb3-a54e-3cdbcd2d938c`，
+已写入 6.18 的 `/etc/fstab`）：
+
+- 冷启动 open session 慢（约 165s，TEE 首次加载 TA）但成功；
+- `cmd 0` 这次会被完成（dmesg：`cmd 0 completed by TEE despite PREEMPTED`）；
+- daemon 继续 `load_template_db`、`check_template_version`，最终进入 **`worker idle`**；
+- `com.huawei.Fingerprint` 稳定注册在系统总线上（`busctl` 可见，pid 为 daemon）；
+- 当前唯一错误是 `libimonitor.so` 缺失，属 DSM 日志库，非关键。
+
+也就是说，**指纹 TEE 栈在 6.18 上已经跑起来了**。剩下的是打磨：
+
+- `cmd 0` 在 6.18 上非常慢（数十秒），驱动把 SMC 当 `PREEMPTED` 反复重试，
+  daemon CPU 偏高（~40%）。UOS 上同一命令只要 674ms，需要查 6.18 的 SMC
+  抢占/中断路径为什么把这条长命令打断；
+- 尚未做真实按压（需要物理接触传感器）来验证录入/识别；
+- 需要把 `/data` 挂载与 teecd/daemon 的启动做成可复现的开机流程。
+
+## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
 
