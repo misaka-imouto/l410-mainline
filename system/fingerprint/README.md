@@ -74,6 +74,17 @@ sudo ./install.sh
 
 ---
 
+## 3.1 在 6.18 上跑 UOS 的厂商栈（调试用）
+
+```bash
+# 以 root 在 6.18 测试根上执行：起 teecd，再起 fingerprint_daemon，
+# 然后打印进程、内核栈、DBus 和 tzdriver 日志
+sudo /path/to/l410-mainline/system/fingerprint/run-uos-stack.sh
+```
+
+具体原理与当前阻塞（4.19 ABI 兼容层已完成，卡在 TEE 不完成用户态发起的
+全局 SMC）见 `docs/hardware/fingerprint.md` 第 6 节。
+
 ## 4. 诊断与测试
 
 运行诊断脚本检查各组件状态：

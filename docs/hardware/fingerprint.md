@@ -202,13 +202,161 @@ send_event_response: agent 0x46536673 ... sends answer back
 fingerprint_dae: tc_client_agent_ioctl: invalid cmd 0x40b07401!
 ```
 
-`0x40b07401` 是 4.19 的 `TC_NS_CLIENT_IOCTL_SES_OPEN_REQ`，编码里的结构大小是 `0xb0`。6.18 的 `struct tc_ns_client_context` 只有 `0x98`，所以 `_IOW('t', 1, struct tc_ns_client_context)` 算出来的 ioctl 号不同，`tc_client_ioctl()` 的 switch 不认，落到 agent ioctl 分支。`teecd` 的 `GET_TEE_VERSION`（`0xc0047415`）也遇到同类问题。
+`0x40b07401` 是 4.19 的 `TC_NS_CLIENT_IOCTL_SES_OPEN_REQ`，编码里的结构大小是 `0xb0`。6.18 的 `struct tc_ns_client_context` 只有 `0xa0`，所以 `_IOW('t', 1, struct tc_ns_client_context)` 算出来的 ioctl 号不同，`tc_client_ioctl()` 的 switch 不认，落到 agent ioctl 分支。`teecd` 的 `GET_TEE_VERSION`（`0xc0047415`）也遇到同类问题。
 
 因此要让 UOS 的 `libteec`/`fingerprint_daemon` 直接跑，需要在 6.18 内核里加 4.19 的 ioctl ABI 兼容层（接受 `0xb0` 的 context 并转换到 6.18 结构），或者重新编译一个 6.18 原生 `libteec`/HAL。下一步优先做前者：只兼容 `SES_OPEN`/`SES_CLOSE`/`SEND_CMD`/`GET_TEE_VERSION`/`WAIT_EVENT` 这几个 HAL 实际用到的命令。
 
 在这一步之后，才是启动 `/vendor/bin/teecd` 和 `/opt/uos-fp/bin/fingerprint_daemon`，确认 DBus `com.huawei.Fingerprint`，再做 PAM。`system/fingerprint/` 里的 udev 规则和服务文件已经准备好。
 
-## 5. 验证与诊断测试
+
+> **2026-10-22 下午更新**：上面这个 ABI 兼容层已经写完并实测通过（linux-l410 提交
+> `cf0f1476d`），`0x40b07401` 不再是问题；现在的阻塞变成 TEE 侧不完成用户态发起的
+> 全局 SMC（`NEED_LOAD_APP`）。详见第 6 节。
+
+## 6. 4.19 用户态 ABI 兼容层（2026-10-22 下午，已完成）
+
+### 6.1 结论先行
+
+`drivers/tee/itrustee` 里的 `tc_client_419_session_ioctl()` / `tc_ns_load_secfile_419()`
+（linux-l410 提交 `cf0f1476d`）已经让 UOS 的 `fingerprint_daemon` 通过了 ABI 这一关：
+
+```text
+之前： [tzdriver] (pid, fingerprint_dae)tc_client_agent_ioctl: invalid cmd 0x40b07401!
+现在： cat /proc/<daemon>/stack
+       smp_smc_send_func+0x8bc/0xf24 [tzdriver]
+       proc_tc_ns_smc+0x64/0x134 [tzdriver]
+       tc_ns_smc_skip_kill+0x18/0x24 [tzdriver]
+       tc_ns_need_load_image.constprop.32+0xe0/0x1e0 [tzdriver]
+       tc_ns_open_session+0x1dc/0xb48 [tzdriver]
+       tc_client_419_session_ioctl+0x27c/0x438 [tzdriver]
+       tc_client_ioctl+0x108/0x580 [tzdriver]
+       __arm64_sys_ioctl+0xa8/0xd0
+```
+
+即 ioctl 号、结构体转换、TA 镜像大小/地址都已正确送进 `tc_ns_open_session()`。
+**现在卡住的不是 ABI，而是 TEE 侧不完成 SMC 命令**，见 6.4。
+
+### 6.2 4.19 ABI 实测结果（4.19 内核反汇编 + 实机 kprobe）
+
+`struct tc_ns_client_context`：4.19 是 **0xb0**，6.18 是 **0xa0**，公共前缀逐字节相同。
+
+| 偏移 | 4.19 | 6.18 |
+|---|---|---|
+| 0x00 | `uuid[16]` | 同 |
+| 0x10 / 0x14 | `session_id` / `cmd_id` | 同 |
+| 0x18 / 0x20 | `returns` / `login` | 同 |
+| 0x28…0x88 | `params[4]`，步长 0x18 | 同 |
+| 0x88 / 0x8c | `param_types` / `started` | 同 |
+| 0x90 | libteec 私有 8 字节指针 | `calling_pid` |
+| 0x98 | libteec 私有 u32（值为 24） | `file_buffer` 低半部 |
+| 0xa0 | `file_size` | — |
+| 0xa8 | `file_buffer` | — |
+| 0x94 / 0x98 | — | `file_size` / `file_buffer` |
+
+0x90/0x98 在 4.19 内核里**从不被读**（只随整个 0xb0 copy_to_user 回用户态），
+所以兼容层原样保留这 16 字节，只搬运 `file_size`/`file_buffer`。
+
+ioctl 号（`_IOW/_IOWR('t', nr, sizeof(struct))`）：4.19 与 6.18 只在“参数结构体尺寸变了”的命令上不同。
+
+| 命令 | 4.19 | 6.18 |
+|---|---|---|
+| SES_OPEN_REQ | `0x40b07401` | `0x40a07401` |
+| SES_CLOSE_REQ | `0xc0b07402` | `0xc0a07402` |
+| SEND_CMD_REQ | `0xc0b07403` | `0xc0a07403` |
+| CANCEL_CMD_REQ | `0xc0b0740d` | `0xc0a0740d` |
+| LOAD_APP_REQ | `0xc0207409`（32 字节参数） | `0xc0247409`（36 字节 packed） |
+| REGISTER_AGENT | `0xc0107407`（16 字节） | 同 |
+| WAIT_EVENT / SEND_EVENT_RESPONSE / UNREGISTER_AGENT / LOGIN | `0xc0047405` / `06` / `08` / `0e` | 同 |
+| GET_TEE_VERSION | `0xc0047415` | 同 |
+
+4.19 的 secfile 参数是 `{u32 type; u8 uuid[16]; u32 file_size; char *file_buffer;}`
+（32 字节）；6.18 是 `struct sec_file_info + uuid + union`（packed，36 字节）。
+
+实机 kprobe（UOS 4.19 跑 `fingerprint_daemon`，`tc_ns_open_session` 入口）：
+
+```text
+uuid    = a32b3d00-cb57-11e3-9c1a-0800200c9a66   （指纹 TA）
+cmd_id  = 2      login.method = 7      param_types = 0x1
++0x90   = 用户态指针        +0x98 = 0x18
++0xa0   = 0x14c7c0 (=1361856，正好是 .sec 文件大小)
++0xa8   = TA 镜像用户态地址
+```
+
+### 6.3 顺带查清的两件事
+
+1. **CA 用的 `/dev/tc_ns_client` fd 是 teecd 给的。** 4.19 上 `fingerprint_daemon` 打开
+   设备后，dev_file 里的 `pub_key` 已经是 `"/usr/bin/fingerprint_daemon"`（27 字节，
+   即 CA 自己的 exe 路径）、`pkg_name` 是 4 字节 uid —— 而 daemon 自己并没有发过
+   `LOGIN`。是 teecd 通过 socket 收到请求后，用 `SO_PEERCRED` 拿到 CA 的 pid/路径，
+   替它做 `LOGIN`，再把准备好的 fd 传过去。因此 6.18 里“只有 teecd 能打开
+   `/dev/tc_ns_client`”这条门禁必须放宽到只保护 `/dev/tc_private`。
+
+2. **LOGIN 证书的两个字段顺序，4.19 和 6.18 是“双重互换”，净效果一致。**
+   4.19 是 `[pub_key_len][pub_key][pkg_name_len][pkg_name]`，
+   6.18 解析成 `[pkg_name_len][pkg_name][pub_key_len][pub_key]`；
+   而 open session 时 4.19 把 pub_key 放 `params[3]`/pkg_name 放 `params[2]`，
+   6.18 正好相反。所以同一条 UOS 证书在两个内核上送到 TEE 的内容相同，不用改。
+
+3. `GET_TEE_VERSION` 在兼容层里**故意不在 client 节点上放行**：两边 ioctl 号相同
+   （`0xc0047415`），但 6.18 发这个 SMC 会让 `smp_smc_send_func` 卡到重试上限，
+   teecd 启动时直接卡死；而 vendor teecd 对 `-EINVAL` 是能容忍的（下一节会看到）。
+
+### 6.4 当前阻塞：TEE 不完成“用户态发起”的全局 SMC 命令
+
+在 6.18 上按顺序起 `teecd` + `fingerprint_daemon`（脚本见
+[system/fingerprint/run-uos-stack.sh](../../system/fingerprint/run-uos-stack.sh)）：
+
+```text
+[tzdriver] (6654, teecd)tc_client_agent_ioctl: invalid cmd 0xc0047415!   # GET_TEE_VERSION，预期
+[tzdriver] (6656, teecd)tc_client_agent_ioctl: invalid cmd 0xc0087411!   # SYNC_SYS_TIME，预期
+[tzdriver] (kworker)show_timeout_cmd_info: pid=6695,pname=fingerprint_dae,
+           lastcmdid=5 ... timedif=10525 ms
+```
+
+`cmd 5 = GLOBAL_CMD_ID_NEED_LOAD_APP`，是 `tc_ns_open_session()` 加载 TA 前的第一步。
+`fingerprint_daemon` 的栈停在 `smp_smc_send_func()`（见 6.1），TEE 始终不置完成位。
+
+对照实验（都是同一台机器、同一次启动）：
+
+| 命令 | 谁发起 | 6.18 结果 |
+|---|---|---|
+| `REGISTER_MAILBOX` (0x17)、`REGISTER_NOTIFY_MEMORY` (0x8)、`REGISTER_RESMEM` (0x24) | 内核 modprobe 阶段 | ✅ 正常完成 |
+| `NEED_LOAD_APP` (0x5) | 用户态 CA（daemon） | ❌ 永不完成 |
+| `GET_TEE_VERSION` (0x22) | 用户态（teecd） | ❌ 永不完成 |
+| `REGISTER_AGENT` (0x6) | 用户态（teecd） | ❌ 永不完成（与上一轮交接文档一致） |
+
+也就是说：**内核自己发的全局命令能通，用户态 dev_file 发起的全局命令不通**；agent
+事件（`WAIT_EVENT`/`SEND_EVENT_RESPONSE`）不受影响。
+
+已经排除/验证过的：
+
+- 不是 ioctl ABI（6.1 的栈已经进到 `tc_ns_open_session`）；
+- 不是结构体尾部（0x90/0x98 保留、`file_size`/`file_buffer` 映射都正确）；
+- 不是 `nsid`/`vmid`：把 `proc_tc_ns_smc()` 里对 legacy Kirin 990 的
+  `nsid`/`vmid` 清零后，`NEED_LOAD_APP` 依旧不完成（实验已回滚，代码未入库）；
+- 不是 `paramtypes`：4.19 的同一命令用 `TEEC_MEMREF_TEMP_INOUT` / `TEEC_VALUE_OUTPUT`，
+  与 6.18 完全一致（反汇编逐条比对过）；
+- 不是 mailbox 池：4.19 和 6.18 都是 4 KiB 参数页 + `mb_cmd_pack`。
+
+下一步建议按这个顺序试：
+
+1. 抓 4.19 上 `NEED_LOAD_APP` 发出去的 **SMC 队列条目原始字节**（kprobe
+   `smp_smc_send`/`tc_ns_smc` 入口 dump 共享内存页），和 6.18 的逐字节 diff。
+   4.19 的 `struct tc_ns_smc_cmd` 里 `cmd_type` 是 **u8**，6.18 是 **u32**（尾部
+   `nsid`/`vmid`/`eventindex`/`res_int[3]`/`started` 也是 6.18 新加的），虽然驱动是
+   把字段抄进共享队列、理论上只看队列布局，但 queue entry 的字段偏移值得重新核对一遍。
+2. 重点看 `uid` / `ca_pid` / `pid` 这三个字段：6.18 的手搓全局命令
+   （`tc_ns_get_tee_version()`、`tc_ns_need_load_image()`）不填它们，而
+   `gp_ops` 里的会话命令会填。试试把它们按 `gp_ops` 的方式填上。
+3. 检查 `init_for_smc_send()` 分配的队列槽位：`event_nr` 被当作“命令索引”复用，
+   TEE 可能只对 `out_bitmap` 里的槽位置位；如果用户态命令拿到的槽位和
+   `cmd_monitor` 记录的索引不一致，就会出现“TEE 完成了、驱动看不到”的假死。
+4. 用 `GLOBAL_CMD_ID_DUMP_SRV_SESS` (0x25) 或 `dump_services_status()` 这类已有
+   调试入口确认 TEE 侧到底有没有看到这条命令。
+
+在这之后才是：确认 DBus `com.huawei.Fingerprint`、把 `deepin-authenticate`/PAM 接上。
+
+## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
 
