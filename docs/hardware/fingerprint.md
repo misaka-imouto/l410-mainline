@@ -666,7 +666,24 @@ operation_phys` 都与 UOS 的取值集合一致，但 TA 仍回 `TEE_ERROR_GENE
 token/timestamp 已排除，下一个要对比的是 **operation buffer**
 （`paramtypes` + `params[]`）的逐字节内容，以及 `token[40]`/`sync` 的精确值。
 
-## 7. 验证与诊断测试## 7. 验证与诊断测试
+### 6.13 TA invoke 已成功；卡在 cmd 0（`094674fe4`）
+
+上一条发现 libteec 的 16 字节 token 在 6.18 上是全 0，而
+`fill_invoke_token` 无条件把它合并进 session token，**把 open 响应里 TEE
+发的 CA token（token[0..15]）覆盖成了 0**。加一个「libteec 非零才合并」的
+判断后：
+
+- `inv: id=0x29 pt=0x53`（`param_types=0x53` 与 UOS 完全一致，scramble 后
+  `op=0x4b58187a`）；
+- **前两条 TA invoke（cmd 0x66 / 0x29）被 TEEOS 正常完成**，daemon 继续
+  发送后续命令。
+
+当前新阻塞是 **cmd 0**（`pt=0x3`，VALUE_INOUT）：TEEOS 不完成它，驱动重试
+直到 10000 次上限（约 176 秒）后超时，daemon 继续到 cmd 3 后退出。
+UOS 上 cmd 0 在 open 之后很快完成。下一步要在 UOS 上抓 cmd 0 的真实
+smc_cmd/operation（尤其是 `params[0].value` 和 `started`），和 6.18 对比。
+
+## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
 
