@@ -415,6 +415,79 @@ nsid     = 0                   vmid = 0
   （`agent call count: 0` 说明没有 agent 事件在等待，所以先确认 TEE 是否真的
   收到了这条命令）。
 
+### 6.7 队列条目真尺寸：102 字节，尾部是 AUTH_ENHANCE 字段（linux-l410 `52ea66282`、`3ee085bab`）
+
+6.6 怀疑的“104 字节”不对，反汇编 `kernel-image-4.19.71` 得到的是 **102 字节**，
+并且尾部字段和 6.18 完全不同：
+
+```text
+ffffff8008dfaa0c  occupy: memcpy_s(dest = g_cmd_data + 0x20 + 0x66*idx, 0x66,
+                                 src = stack, 0x66)          ; 条目 = 0x66 = 102
+ffffff8008dfab60  copy_out: src = g_cmd_data + 0x750 + 0x66*idx ; out[] 基点 = 0x750
+ffffff8008df9410  set_abort 清 in-entry +45/+49/+77/+81/+89..96 ; 见下
+```
+
+即队列头是 3 个 bitmap（各 8 字节）+ `smc_lock`(4) + `last_in`(4) = `0x20`，
+`in[18]` 之后 `last_out` 4 字节，`out[]` 落在 `0x20 + 18*102 + 4 = 0x750`。
+所以 6.18 原来的 109 字节条目让 `in[1..17]`/`out[0..17]` 全部错位，TEE 的结果
+写在驱动读不到的地方。
+
+4.19 真机（`CONFIG_AUTH_ENHANCE=y`）尾部和 6.18 的对应关系如下（用 openEuler
+iTrustee 仓库 `368a6eb` 的同一段源码交叉验证；它的 `set_abort_cmd()` 恰好只清
+`token_phys/token_h_phys/params_phys/params_h_phys`，地址和 4.19 反汇编逐字对上）：
+
+| 偏移 | 4.19（102 字节） | 6.18（109 字节） |
+|---|---|---|
+| 0..15 | `uuid` | `uuid` |
+| 16 | `u8 cmd_type` | `u8 cmd_type` |
+| 17..76 | `cmd_id` … `ca_pid` | 同（逐字节一致） |
+| 77 | `token_phys` | `pid`（tgid） |
+| 81 | `token_h_phys` | `nsid` |
+| 85 | `pid`（tgid） | `vmid` |
+| 89 | `params_phys` | `eventindex` |
+| 93 | `params_h_phys` | `res_int[0]` |
+| 97 | `eventindex` | `res_int[1]` |
+| 101 | `bool started` | `res_int[2]`（+`started`@105、`res_chr[3]`@106） |
+
+16+1+21*4+1 = 102。注意：4.19 没有 `nsid`/`vmid`/`res_int`/`res_chr`；旧 TEEOS
+不认识它们。**更要紧的是**，6.18 把 tgid 放在 77，旧 TEEOS 会把 tgid 当
+`token_phys` 用（一个随机的“物理地址”）。
+
+实现（`core/smc_smp.h`、`core/smc_smp.c`）：
+
+- 新增 `struct tc_ns_smc_cmd_wire`（上面的 102 字节布局，`compile_time_assert`）；
+- `struct tc_ns_smc_queue` 的 `in[]`/`out[]` 改用 wire 结构；
+- `occupy_free_smc_in_entry()` / `copy_smc_out_entry()` 两个边界上做
+  `smc_cmd_to_wire()` / `smc_cmd_from_wire()` 转换，丢弃 `nsid`/`vmid`，
+  `token/params` 留 0（vendor 对全局命令也是 0），tgid 搬到 85；
+- `set_abort_cmd()` 补上 vendor 会清的 `token_phys/token_h_phys/params_phys/params_h_phys`。
+
+实测 md5 与本地构建一致，加载后 `mailbox_register` 终于读到 TEEOS 的**真实**回复：
+
+```text
+[tzdriver] mailbox_register: resigter mailbox failed, ret=-65530
+```
+
+`-65530 == 0xFFFF0006 == TEE_ERROR_BAD_PARAMETERS`。也就是说这条
+`GLOBAL_CMD_ID_REGISTER_MAILBOX` 一直被 TEEOS 拒绝，只是旧代码读的是
+（永远为 0 的）错位 `out[]`，误以为成功，模块才得以加载。原因是 4.19 的
+注册协议不同：vendor 注册**一整块连续** `MAILBOX_POOL_SIZE`，两个参数都是
+`VALUE_INPUT`，传的是 `page_address(all_pages)`；6.18 传的是
+`mailbox_buffer[]` 数组。完全照 vendor 协议试过一次，结果**把 TEEOS 卡死**
+（FRP/SSH 全断，只能等硬复位），所以 `3ee085bab` 改成：legacy Kirin 990 上
+把这次拒绝当非致命，记录警告后照常按已分配的 pool 数继续。TA 镜像加载路径
+不用 mailbox，先不阻塞；真正要用 agent（mailbox）时再补 vendor 注册协议。
+
+下一轮建议：
+
+1. 用 `52ea66282` + `3ee085bab` 干净启动，观察 `NEED_LOAD_APP` 是否终于被完成
+   （`out_bitmap` 置位、`fingerprint_daemon` 不再重试 TA 加载）；
+2. 若仍不完成，怀疑 `nsid/vmid` 虽丢弃但驱动内部 agent 路由或 `SET_SERVE_CMD`
+   仍依赖它们，用 `proc_tc_ns_smc`/`smc_show_cmd_bitmap` 打印真实队列条目；
+3. 若 TA 能加载但 invoke 失败，多半就是 `CONFIG_AUTH_ENHANCE` 的
+   `token_phys/params_phys`：4.19 用户态把 token 放在 context 的 `0xe8`，
+   需要让 4.19 ABI 层把它转成 wire 的两个 phys 字段。
+
 ## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
