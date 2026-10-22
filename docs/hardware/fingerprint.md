@@ -169,7 +169,26 @@ SUBSYSTEM=="huawei_fp", MODE="0660", GROUP="input"
    register_agent_to_tee: register agent to tee failed, ret = -1
    ```
 
-   `GLOBAL_CMD_ID_REGISTER_AGENT` 一直返回未完成，10000 次后超时；fs/misc agent 注册不上。实测 teecd 进程现在能起来并停在那里等待（不再立刻退出），但直接启动 `/opt/uos-fp/bin/fingerprint_daemon` 后进程很快消失，DBus 上没有 `com.huawei.Fingerprint`。下一步要对比 4.19 的 `tc_ns_smc_cmd` 字段、`GLOBAL_CMD_ID_REGISTER_AGENT` 参数和 mailbox 物理地址，确认是 SMC 命令布局还是 agent buffer 在 TEE 侧不可访问。
+   `GLOBAL_CMD_ID_REGISTER_AGENT` 一直返回未完成，10000 次后超时；fs/misc agent 注册不上。实测 teecd 进程现在能起来并停在那里等待（不再立刻退出），但直接启动 `/opt/uos-fp/bin/fingerprint_daemon` 后进程很快消失，DBus 上没有 `com.huawei.Fingerprint`。
+
+### 4.19 运行时对比（kprobe / function_graph，UOS 4.19 实机）
+
+在 UOS 4.19 上用 kprobe 抓到了 `tc_ns_register_agent()` 的真实参数（3 次调用）：
+
+```text
+r0=dev_file, r1=0x46536673, r2=0x1000, r3=user_buffer, r4=1   # fs agent
+r0=dev_file, r1=0x4d495343, r2=0x1000, r3=user_buffer, r4=1   # misc agent
+r0=dev_file, r1=0x4c4f4144, r2=0x1000, r3=user_buffer, r4=1   # load agent
+```
+
+agent ID 和 6.18 一致，buffer 都是 4 KiB。关键差异在调用路径：
+
+- 4.19 的 `function_graph` 里，`tc_ns_register_agent()` 只做 `vm_mmap()` / `remap_pfn_range()` 等 buffer 映射，**没有从 teecd 线程直接调用 `tc_ns_smc`**；
+- 6.18 的 `tc_ns_register_agent()` 在同一个线程里同步调用 `register_agent_to_tee()` → `tc_ns_smc()`。
+
+也就是说 4.19 走的是异步 SMC 队列 / `smc_svc_thread` 路径，6.18 改成了同步直发。TEE 很可能只接受队列线程发出的 agent 注册命令，或者同步直发时缺少队列路径才会填的字段（`event_nr`、`dev_file_id`、`ca_pid` 等）。这比单纯改 `GLOBAL_CMD_ID_REGISTER_AGENT` 的 `cmd_id` 更可能解释“命令一直不完成”。
+
+下一步应该抓 4.19 `smp_smc_send`/`smc_svc_thread` 实际发送的 `tc_ns_smc_cmd`（在队列线程里），和 6.18 `register_agent_to_tee()` 填的结构逐字段 diff；或者把 6.18 的 agent 注册改回 4.19 的异步队列路径。
 
 在这一步之后，才是启动 `/vendor/bin/teecd` 和 `/opt/uos-fp/bin/fingerprint_daemon`，确认 DBus `com.huawei.Fingerprint`，再做 PAM。`system/fingerprint/` 里的 udev 规则和服务文件已经准备好。
 
