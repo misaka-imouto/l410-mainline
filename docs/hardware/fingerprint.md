@@ -146,9 +146,32 @@ SUBSYSTEM=="huawei_fp", MODE="0660", GROUP="input"
    [tzdriver] (teecd)ioctl_register_agent: the agent is not access
    ```
 
-   根因是 6.18 的 `drivers/tee/itrustee/tzdriver_internal/whitelist/agent_allowed_ca.c` 里 `g_allowed_ext_agent_ca[]` 是空数组，任何外部 agent 都过不了 `is_allowed_agent_ca()`。4.19 厂商内核里同名表有内容；需要从本地 `kernel-image-4.19.71` + `System.map-4.19.71` 里把表项（路径、UID、agent ID）解出来，或先临时允许 `teecd`/`fingerprint_daemon` 的路径做 bring-up。
+   根因有两层：
 
-修好 agent 白名单后，剩下的工作是：启动 `/vendor/bin/teecd` 和 `/opt/uos-fp/bin/fingerprint_daemon`，确认 DBus `com.huawei.Fingerprint` 出现，再用 `pam_exec` 或一个小的 PAM 模块调用它的 Identify 接口。`system/fingerprint/` 里的 udev 规则和服务文件已经准备好，只缺这两个二进制和 TEE 白名单。
+   - `agent_allowed_ca.c` 没有加进 `tzdriver-objs`，实际链接的是 `core/agent.c` 里的 weak `is_allowed_agent_ca()`，所有外部 agent 都被拒绝；
+   - 补上 Makefile 后，6.18 里的 `g_allowed_ext_agent_ca[]` 又是空表。已从本地 `kernel-image-4.19.71`（符号 `g_allowed_ext_agent_ca`，`char path[512] + u32 uid + u32 agent_id`）解出 4.19 的 3 项：
+
+     | path | uid | agent_id |
+     |---|---|---|
+     | `/vendor/bin/hiaiserver` | 1000 | `0x53656345` |
+     | `/vendor/bin/hw/vendor.huawei.hardware.biometrics.hwfacerecognize@1.1-service` | 1000 | `0x46616365` |
+     | 同上 | 1000 | `0x46616345` |
+
+     另外 `/vendor/bin/teecd`（uid 0）会注册 fs/misc/secfile/gtask 等内部 agent，这 4 个 ID 不在 4.19 表里；现在对 teecd 路径单独放行（它的路径/UID 已由 `check_teecd_auth()` 校验）。
+
+   同时修了 6.18 上 `agent_buffer_map()` 用 `down_read` 调 `remap_pfn_range()` 的锁错误（改为 `mmap_write_lock`），以及 `smp_smc_send_func()` 的 20 次 outer retry（改为 10000 + `cond_resched()`）。
+
+3. **teecd 现在能过认证和白名单，但 TEE 不完成 agent 注册**。实测日志：
+
+   ```text
+   is_allowed_agent_ca: external agent uid=0 path=/vendor/bin/teecd id=0x46536673
+   smp_smc_send_func: cmd 3 outer retry exceeded ...
+   register_agent_to_tee: register agent to tee failed, ret = -1
+   ```
+
+   `GLOBAL_CMD_ID_REGISTER_AGENT` 一直返回未完成，10000 次后超时；fs/misc agent 注册不上，teecd 就起不来。下一步要对比 4.19 的 `tc_ns_smc_cmd` 字段、`GLOBAL_CMD_ID_REGISTER_AGENT` 参数和 mailbox 物理地址，确认是 SMC 命令布局还是 agent buffer 在 TEE 侧不可访问。
+
+在这一步之后，才是启动 `/vendor/bin/teecd` 和 `/opt/uos-fp/bin/fingerprint_daemon`，确认 DBus `com.huawei.Fingerprint`，再做 PAM。`system/fingerprint/` 里的 udev 规则和服务文件已经准备好。
 
 ## 5. 验证与诊断测试
 
