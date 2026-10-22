@@ -370,8 +370,8 @@ systemd 对 SysV 脚本的提示、staging 模块的 taint 提示等。`tests/uf
 |---|---|---|---|
 | aud.card / aud.codec | 声卡与 PCM；Hi6405 版本 | hi6405，放音加录音；version 0x11、chip id 64 05 01 00 | |
 | aud.controls | 11 个必需控件 | 都在 | |
-| aud.amp-volume | 两颗 TAS2562 的数字音量读数 | 110/110（0 dB）。读成 0 说明 `ASoC: tas2562: report the power-on digital volume` 的修复丢了 | |
-| aud.state-file | `/var/lib/alsa/asound.state` 里的功放音量 | 都 > 0（否则开机 alsa-restore 会让喇叭没声） | |
+| aud.amp-volume | 两颗 TAS2562 的数字音量读数（仅 WDU0B） | 110/110（0 dB）。读成 0 说明 `ASoC: tas2562: report the power-on digital volume` 的修复丢了；CS35L36 跳过 | |
+| aud.state-file | `/var/lib/alsa/asound.state` 里的功放音量（仅 WDU0B） | 都 > 0（否则开机 alsa-restore 会让喇叭没声）；CS35L36 跳过 | |
 | aud.amps / amps-idle | 功放 debugfs；空闲时状态 | 两颗都能读；关断，没有实时故障位 | |
 | aud.idle-pm | 空闲时 SLIMbus 的运行时状态 | suspended，否则 WARN | |
 | aud.jack | 耳机检测输入设备 | 存在，记录耳机插拔状态 | |
@@ -379,7 +379,7 @@ systemd 对 SysV 脚本的提示、staging 模块的 taint 提示等。`tests/uf
 | aud.pipewire | PipeWire 默认输出设备（按 ALSA 卡属性识别，界面名是本地化的“内置音频”） | 是 hi6405 声卡 | |
 | aud.play | 扬声器放 2 s -40 dBFS 1 kHz（PCM 空闲时用 `aplay hw:`，被占用时以 PipeWire 用户 `pw-play`） | 成功，hw_ptr 前进 | ✓ |
 | aud.dma | ASP DMA 中断 | 2 s 内 ≥ 60 次（20 ms 周期） | ✓ |
-| aud.amps-play | 放音中两颗功放 | 工作态、没有故障、没有实时 TDM 时钟错误 | ✓ |
+| aud.amps-play | 放音中两颗功放 | 工作态、没有故障；TAS2562 另外没有实时 TDM 时钟错误，CS35L36 看 PWR_CTRL1/AMP_OUT_MUTE | ✓ |
 | aud.amps-stop | 放音结束后 0.6 s | 两颗都已关断 | ✓ |
 | aud.mic | 内置 DMIC 录 1 s | 峰值 ≥ 20、取值种类 ≥ 20（不是静音） | ✓ |
 | aud.idle-after | 放音录音结束 2.5 s 后的 SLIMbus | runtime suspended，否则 WARN | ✓ |

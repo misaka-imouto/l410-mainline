@@ -1126,13 +1126,28 @@ m_gpu() {
 # ---------------------------------------------------------------- audio
 amps() { cat /sys/kernel/debug/hi6405-card/amps 2> /dev/null; }
 amp_field() { echo "$1" | tr ' ' '\n' | awk -F= -v r="$2" '$1 == r { print $2 }'; }
-amp_check() { # $1 = amps dump, $2 = want PWR_CTRL mode (0 active, 2 shutdown); prints problems
-	local line dev pc v0 v1 out=""
+amp_kind() { amps | grep -q '^3-005' && echo cs35l36 || echo tas2562; }
+amp_check() { # $1 = amps dump, $2 = 0 active / 2 shutdown; prints problems
+	local line dev out="" kind; kind=$(amp_kind)
 	while read -r dev line; do
-		pc=$(amp_field "$line" 02); v0=$(amp_field "$line" 1f); v1=$(amp_field "$line" 20)
-		[ -n "$pc" ] || { out="$out $dev:unreadable"; continue; }
-		[ $((0x$pc & 3)) = "$2" ] || out="$out $dev:PWR_CTRL=$pc"
-		[ $((0x$v0 & 0x07)) = 0 ] && [ $((0x$v1 & 0x0e)) = 0 ] || out="$out $dev:live-fault(1f=$v0,20=$v1)"
+		[ -n "$line" ] || continue
+		if [ "$kind" = cs35l36 ]; then
+			local p1 mute
+			p1=$(amp_field "$line" 002014); mute=$(amp_field "$line" 002024)
+			[ -n "$p1" ] || { out="$out $dev:unreadable"; continue; }
+			if [ "$2" = 0 ]; then
+				[ $((0x$p1 & 1)) = 1 ] || out="$out $dev:PWR_CTRL1=$p1"
+				[ $((0x$mute & 0x10)) = 0 ] || out="$out $dev:muted($mute)"
+			else
+				[ $((0x$p1 & 1)) = 0 ] || out="$out $dev:PWR_CTRL1=$p1"
+			fi
+		else
+			local pc v0 v1
+			pc=$(amp_field "$line" 02); v0=$(amp_field "$line" 1f); v1=$(amp_field "$line" 20)
+			[ -n "$pc" ] || { out="$out $dev:unreadable"; continue; }
+			[ $((0x$pc & 3)) = "$2" ] || out="$out $dev:PWR_CTRL=$pc"
+			[ $((0x$v0 & 0x07)) = 0 ] && [ $((0x$v1 & 0x0e)) = 0 ] || out="$out $dev:live-fault(1f=$v0,20=$v1)"
+		fi
 	done <<< "$1"
 	echo "$out"
 }
@@ -1144,25 +1159,33 @@ m_audio() {
 	[ -e /dev/snd/pcmC${card}D0p ] && [ -e /dev/snd/pcmC${card}D0c ] && pass aud.card "card $card hi6405 ($(awk -v c=$card '$1 == c { getline; sub(/^ +/, ""); print }' /proc/asound/cards)), playback + capture" || fail aud.card "PCM devices missing"
 	klog | grep -q "Hi6405 version 0x11, chip id 64 05 01 00" && pass aud.codec "Hi6405 version 0x11, chip id 64 05 01 00" || fail aud.codec "Hi6405 not identified"
 	x=$(amixer -c $card controls 2> /dev/null)
-	for c in "Speaker Playback Switch" "Headset Playback Switch" "Mic Capture Switch" "Headset Mic Capture Switch" "Speaker Switch" \
-		"Left ASI1 Sel" "Right ASI1 Sel" "Left Digital Volume Control" "Right Digital Volume Control" "Headphone Jack" "Headset Mic Jack"; do
-		[[ $x == *"'$c'"* ]] || bad="$bad '$c'"
-	done
-	[ -z "$bad" ] && pass aud.controls "11 required controls present" || fail aud.controls "missing:$bad"
-	PLAN=AUD-05
-	x="$(amixer -c $card cget name='Left Digital Volume Control' 2> /dev/null | awk -F= '/: values=/ { print $2 }') $(amixer -c $card cget name='Right Digital Volume Control' 2> /dev/null | awk -F= '/: values=/ { print $2 }')"
-	[ "$x" = "110 110" ] && pass aud.amp-volume "TAS2562 digital volume 110/110 (0 dB) both amps" || fail aud.amp-volume "TAS2562 digital volume '$x' (0 = -110 dB = silent speakers)"
-	if [ -r /var/lib/alsa/asound.state ]; then
-		x=$(awk '/Digital Volume Control/ { f = 1 } f && /value/ { print $2; f = 0 }' /var/lib/alsa/asound.state | tr '\n' ' ')
-		local z=0 v; for v in $x; do [ "$v" -gt 0 ] 2> /dev/null || z=1; done
-		[ -n "$x" ] && [ $z = 0 ] && pass aud.state-file "asound.state keeps amp volume $x" || fail aud.state-file "asound.state stores amp volume '$x': alsa-restore will mute the speakers"
+	local -a common=("Speaker Playback Switch" "Headset Playback Switch" "Mic Capture Switch" "Headset Mic Capture Switch" "Speaker Switch" "Headphone Jack" "Headset Mic Jack")
+	if [ "$(amp_kind)" = cs35l36 ]; then
+		for c in "${common[@]}" "Left AMP Enable Switch" "Right AMP Enable Switch" "Left BOOST Enable Switch" "Right BOOST Enable Switch"; do
+			[[ $x == *"'$c'"* ]] || bad="$bad '$c'"
+		done
+		[ -z "$bad" ] && pass aud.controls "CS35L36 controls present" || fail aud.controls "missing:$bad"
+		info aud.amp-volume "CS35L36 amplifiers, no TAS2562 digital volume control"
+	else
+		for c in "${common[@]}" "Left ASI1 Sel" "Right ASI1 Sel" "Left Digital Volume Control" "Right Digital Volume Control"; do
+			[[ $x == *"'$c'"* ]] || bad="$bad '$c'"
+		done
+		[ -z "$bad" ] && pass aud.controls "TAS2562 controls present" || fail aud.controls "missing:$bad"
+		PLAN=AUD-05
+		x="$(amixer -c $card cget name='Left Digital Volume Control' 2> /dev/null | awk -F= '/: values=/ { print $2 }') $(amixer -c $card cget name='Right Digital Volume Control' 2> /dev/null | awk -F= '/: values=/ { print $2 }')"
+		[ "$x" = "110 110" ] && pass aud.amp-volume "TAS2562 digital volume 110/110 (0 dB) both amps" || fail aud.amp-volume "TAS2562 digital volume '$x' (0 = -110 dB = silent speakers)"
+		if [ -r /var/lib/alsa/asound.state ]; then
+			x=$(awk '/Digital Volume Control/ { f = 1 } f && /value/ { print $2; f = 0 }' /var/lib/alsa/asound.state | tr '\n' ' ')
+			local z=0 v; for v in $x; do [ "$v" -gt 0 ] 2> /dev/null || z=1; done
+			[ -n "$x" ] && [ $z = 0 ] && pass aud.state-file "asound.state keeps amp volume $x" || fail aud.state-file "asound.state stores amp volume '$x': alsa-restore will mute the speakers"
+		fi
 	fi
 	x=$(amps)
-	[ "$(echo "$x" | grep -c '^3-004')" = 2 ] || fail aud.amps "amps debugfs: '$x'"
+	[ "$(echo "$x" | grep -cE '^3-004|^3-005')" = 2 ] || fail aud.amps "amps debugfs: '$x'"
 	local playing; playing=$(grep -l RUNNING /proc/asound/card$card/pcm0p/sub0/status 2> /dev/null)
 	if [ -z "$playing" ]; then
 		bad=$(amp_check "$x" 2)
-		[ -z "$bad" ] && pass aud.amps-idle "both TAS2562 shut down while idle, no live faults" || fail aud.amps-idle "$bad"
+		[ -z "$bad" ] && pass aud.amps-idle "both amplifiers shut down while idle, no live faults" || fail aud.amps-idle "$bad"
 		PLAN=AUD-17
 		[ "$(rd /sys/bus/platform/devices/fa550000.slimbusmisc/power/runtime_status)" = suspended ] && pass aud.idle-pm "SLIMbus runtime-suspended while idle" ||
 			warn aud.idle-pm "SLIMbus $(rd /sys/bus/platform/devices/fa550000.slimbusmisc/power/runtime_status) while idle"
@@ -1199,6 +1222,9 @@ PY
 	on_restore "amixer -c $card -q cset name='Speaker Playback Switch' $sw_spk; amixer -c $card -q cset name='Headset Playback Switch' $sw_hp"
 	amixer -c $card -q cset name='Speaker Playback Switch' on; amixer -c $card -q cset name='Headset Playback Switch' off
 	amixer -c $card -q cset name='Speaker Switch' on 2> /dev/null
+	for c in 'Left AMP Enable Switch' 'Right AMP Enable Switch' 'Left BOOST Enable Switch' 'Right BOOST Enable Switch'; do
+		amixer -c $card -q cset name="$c" on 2> /dev/null
+	done
 	dma() { awk '/asp_dma_irq/ { s = 0; for (i = 2; i <= NF; i++) if ($i ~ /^[0-9]+$/) s += $i; print s }' /proc/interrupts; }
 	local i0 i1 h1 h2 amp_run rc
 	i0=$(dma)
@@ -1221,7 +1247,7 @@ PY
 	[ $rc = 0 ] && [ -n "$h2" ] && [ "$h2" -gt "${h1:-0}" ] && pass aud.play "$path, 2 s: hw_ptr $h1 -> $h2 in 0.3 s" || fail aud.play "$path rc $rc, hw_ptr '$h1' -> '$h2': $(tail -1 "$OUT/aplay.log")"
 	[ $((i1 - i0)) -ge 60 ] && pass aud.dma "ASP DMA interrupts +$((i1 - i0)) (20 ms periods)" || fail aud.dma "ASP DMA interrupts +$((i1 - i0)) in 2 s"
 	bad=$(amp_check "$amp_run" 0)
-	[ -z "$bad" ] && pass aud.amps-play "both TAS2562 active, no faults, no live TDM clock error while playing" || fail aud.amps-play "while playing:$bad"
+	[ -z "$bad" ] && pass aud.amps-play "both amplifiers active, no faults" || fail aud.amps-play "while playing:$bad"
 	sleep 0.6
 	bad=$(amp_check "$(amps)" 2)
 	[ -z "$bad" ] && pass aud.amps-stop "both amps shut down after the stream ended" || fail aud.amps-stop "after the stream:$bad"

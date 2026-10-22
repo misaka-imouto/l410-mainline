@@ -1,5 +1,5 @@
 #!/bin/bash
-# Audio test for the L410 6.18 kernel (Hi6405 + ASP DMA + SLIMbus + TAS2562).
+# Audio test for the L410 6.18 kernel (Hi6405 + ASP DMA + SLIMbus + TAS2562/CS35L36).
 # Runs as root on the L410 Debian (or with dev/l410-harness.sh --script), no one listens:
 # checks card/devices, codec identity, DAPM power, DMA progress, amplifier status
 # and that the microphones deliver non-silent data. Prints PASS/FAIL/SKIP lines.
@@ -18,7 +18,7 @@ DBG=/sys/kernel/debug
 $S mount -t debugfs debugfs $DBG 2>/dev/null
 
 echo "== kernel $(uname -r)"
-$S dmesg | grep -iE "hi6405|hi64xx|slimbus|asp.pcm|asp_pcm|tas2562|DA_combine|hisi-asp|snd|asoc" > "$OUT/dmesg-audio.txt"
+$S dmesg | grep -iE "hi6405|hi64xx|slimbus|asp.pcm|asp_pcm|tas2562|cs35l36|DA_combine|hisi-asp|snd|asoc" > "$OUT/dmesg-audio.txt"
 cat "$OUT/dmesg-audio.txt" | tail -60
 
 # --- 1. codec controller / chip id (M1) ---
@@ -69,9 +69,21 @@ if [ $HAVE_ALSA = 1 ]; then
 	arecord -l | grep -q "card $CARD" && pass "arecord -l lists the card" || fail "arecord -l"
 	$S amixer -c $CARD controls > "$OUT/controls.txt"
 	for c in "Speaker Playback Switch" "Headset Playback Switch" "Mic Capture Switch" \
-		"Headset Mic Capture Switch" "Left ASI1 Sel" "Right ASI1 Sel" "Headphone Jack" "Headset Mic Jack"; do
+		"Headset Mic Capture Switch" "Headphone Jack" "Headset Mic Jack"; do
 		grep -q "'$c'" "$OUT/controls.txt" && pass "control '$c'" || fail "control '$c' missing"
 	done
+	if grep -q "'Left ASI1 Sel'" "$OUT/controls.txt"; then
+		AMP=tas2562
+		for c in "Left ASI1 Sel" "Right ASI1 Sel"; do
+			grep -q "'$c'" "$OUT/controls.txt" && pass "control '$c'" || fail "control '$c' missing"
+		done
+	else
+		AMP=cs35l36
+		for c in "Left AMP Enable Switch" "Right AMP Enable Switch" \
+			"Left BOOST Enable Switch" "Right BOOST Enable Switch"; do
+			grep -q "'$c'" "$OUT/controls.txt" && pass "control '$c'" || fail "control '$c' missing"
+		done
+	fi
 else
 	skip "alsa-utils not installed: aplay/arecord/amixer tests skipped"
 fi
@@ -87,6 +99,10 @@ if [ $HAVE_ALSA = 1 ]; then
 	$S amixer -c $CARD -q cset name='Headset Playback Switch' off
 	$S amixer -c $CARD -q cset name='Speaker Playback Switch' on
 	$S amixer -c $CARD -q cset name='Speaker Switch' on 2>/dev/null
+	for c in "Left AMP Enable Switch" "Right AMP Enable Switch" \
+		"Left BOOST Enable Switch" "Right BOOST Enable Switch"; do
+		$S amixer -c $CARD -q cset name="$c" on 2>/dev/null
+	done
 	I0=$(dma_irqs)
 	# low level 1 kHz tone (-30 dBFS), 4 s
 	python3 -c '
@@ -127,18 +143,26 @@ sys.stdout.buffer.write(b"".join(struct.pack("<hh", int(a * math.sin(2 * math.pi
 	while read -r dev rest; do
 		n=$((n + 1))
 		field() { echo "$rest" | tr ' ' '\n' | awk -F= -v r="$1" '$1 == r {print $2}'; }
-		pc=$(field 02)
-		v0=$(field 1f); v1=$(field 20)
-		l0=$(field 24); l1=$(field 25)
-		case $pc$v0$v1$l0$l1 in *[!0-9a-f]* | "") fail "amp $dev registers unreadable ($rest)"; continue ;; esac
-		[ $((0x$pc & 3)) = 0 ] && pass "amp $dev active while playing (PWR_CTRL=$pc)" || fail "amp $dev not active (PWR_CTRL=$pc)"
-		if [ $(((0x$v0 | 0x$l0) & 0x03)) = 0 ] && [ $(((0x$v1 | 0x$l1) & 0x0e)) = 0 ]; then
-			pass "amp $dev no over-temperature/over-current/brown-out/VBAT faults"
+		if [ "$AMP" = cs35l36 ]; then
+			p1=$(field 002014); mute=$(field 002024)
+			case $p1$mute in *[!0-9a-f]* | "") fail "amp $dev registers unreadable ($rest)"; continue ;; esac
+			[ $((0x$p1 & 1)) = 1 ] && pass "amp $dev enabled while playing (PWR_CTRL1=$p1)" || fail "amp $dev not enabled (PWR_CTRL1=$p1)"
+			[ $((0x$mute & 0x10)) = 0 ] && pass "amp $dev unmuted" || fail "amp $dev muted (AMP_OUT_MUTE=$mute)"
+			echo "note: amp $dev CS35L36 INT1=$(field d00000) INT3=$(field d00008)"
 		else
-			fail "amp $dev faults: live 0x1f=$v0 0x20=$v1 latched 0x24=$l0 0x25=$l1"
+			pc=$(field 02)
+			v0=$(field 1f); v1=$(field 20)
+			l0=$(field 24); l1=$(field 25)
+			case $pc$v0$v1$l0$l1 in *[!0-9a-f]* | "") fail "amp $dev registers unreadable ($rest)"; continue ;; esac
+			[ $((0x$pc & 3)) = 0 ] && pass "amp $dev active while playing (PWR_CTRL=$pc)" || fail "amp $dev not active (PWR_CTRL=$pc)"
+			if [ $(((0x$v0 | 0x$l0) & 0x03)) = 0 ] && [ $(((0x$v1 | 0x$l1) & 0x0e)) = 0 ]; then
+				pass "amp $dev no over-temperature/over-current/brown-out/VBAT faults"
+			else
+				fail "amp $dev faults: live 0x1f=$v0 0x20=$v1 latched 0x24=$l0 0x25=$l1"
+			fi
+			[ $((0x$v0 & 0x04)) = 0 ] || fail "amp $dev TDM clock error while playing"
+			[ $((0x$l0 & 0x04)) = 0 ] || echo "note: amp $dev TDM clock error latched (clock start/stop), not live"
 		fi
-		[ $((0x$v0 & 0x04)) = 0 ] || fail "amp $dev TDM clock error while playing"
-		[ $((0x$l0 & 0x04)) = 0 ] || echo "note: amp $dev TDM clock error latched (clock start/stop), not live"
 	done < "$OUT/amps-playing.txt"
 	[ $n = 2 ] || fail "expected 2 amplifiers, got $n"
 	$S amixer -c $CARD -q cset name='Speaker Playback Switch' off

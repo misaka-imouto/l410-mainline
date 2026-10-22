@@ -1,6 +1,6 @@
 # 音频
 
-L410 的声卡由四部分组成：外置 codec 海思 Hi6405，把 codec 接到 SoC 的 SLIMbus，在内存和 SLIMbus 端口之间搬 PCM 的 ASP DMA，以及两颗 TI TAS2562 扬声器功放。驱动在内核仓库的 `sound/soc/hisilicon/hi6405/`（`CONFIG_SND_SOC_HI6405_L410`，内建），功放用主线的 `sound/soc/codecs/tas2562.c`。
+L410 的声卡由四部分组成：外置 codec 海思 Hi6405，把 codec 接到 SoC 的 SLIMbus，在内存和 SLIMbus 端口之间搬 PCM 的 ASP DMA，以及两颗扬声器功放。功放有两个板型：KLVU-WDU0B 用 TI TAS2562，KLVU-WDU0 用 Cirrus Logic CS35L36。驱动在内核仓库的 `sound/soc/hisilicon/hi6405/`（`CONFIG_SND_SOC_HI6405_L410`，内建），功放分别用主线的 `sound/soc/codecs/tas2562.c` 和 `cs35l36.c`。
 
 现在能用的：扬声器放音（48 kHz）、耳机通路、4 个内置数字麦录音，PipeWire 里显示为 Speaker / Internal Microphone；**DP/HDMI 外部数字音频输出（声卡 `hisihdmi`，支持 2~8 声道，PCM 设备 `01-00`，带 HDMI Jack 与 ELD 控件）**。耳机插拔、线控按键、耳麦录音的代码都在，还没有人插耳机验证过。
 
@@ -29,9 +29,15 @@ L410 的声卡由四部分组成：外置 codec 海思 Hi6405，把 codec 接到
 | KLVU-WDU0B | `L410 KLVU-WDU0B` | 2× TAS2562 | 0x4c / 0x4e | 0x4c/0x4e 读到 TAS2562 版本寄存器，正常出声 |
 | KLVU-WDU0 | `L410 KLVU-WDU0` | 2× CS35L36 | 0x50 / 0x52 | 0x4c/0x4e 版本读取失败（-242），0x50/0x52 读到 CS35L36 芯片 ID `0x35a36` |
 
-当前远程测试机是 **KLVU-WDU0（BIOS 1.00.75）**：0x4c/0x4e 上没有任何器件（6.18 和厂商 4.19 都 NAK），0x50/0x52 才是 CS35L36。因此本仓库的 TAS2562 代码在这台机器上无法出声，也不能用这台机器验证 TAS2562 的改动；本文后面关于 TAS2562 的寄存器、爆音、IDC 阈值等内容都来自 WDU0B。
+当前远程测试机是 **KLVU-WDU0（BIOS 1.00.75）**：0x4c/0x4e 上没有任何器件（6.18 和厂商 4.19 都 NAK），0x50/0x52 才是 CS35L36。因此这台机器只能验证 CS35L36，不能验证 TAS2562；本文关于 TAS2562 寄存器、爆音、IDC 阈值的内容来自 WDU0B。
 
-6.18 现在会在 TAS2562 probe 时先做厂商同样的复位（GPIO241 低 3 ms、拉高后等 100 ms）再读版本寄存器；读不到就返回 `-ENODEV`，card 再确认两颗功放都真的存在才创建扬声器 DAI link。这样在 WDU0 上声卡仍能注册（耳机、麦克风可用），只是没有扬声器，也不会再刷 `-121`。WDU0 的 CS35L36 支持还没做，见下文已知问题。
+6.18 的探测和选路：
+
+- TAS2562 probe 先按厂商时序复位（GPIO241 低 3 ms、拉高后等 100 ms），再读版本寄存器；读不到就返回 `-ENODEV`，不会注册一个永远 NAK 的 component。
+- CS35L36 的 `reset-gpios` 在设备树里标成 active low（GPIO241 共用），probe 时高-低-高脉冲后等 100 ms 再读芯片 ID；两颗都读到 `Revision: B1` 才注册。
+- card 先试 TAS2562，再试 CS35L36，只有一对 driver 真正 probe 成功才创建 I2S4 扬声器 DAI link。I2C 还没 probe 完时 card 返回 `-EPROBE_DEFER`，不会注册一个没有扬声器的 card。
+
+CS35L36 的 link 用 48 kHz / S32_LE / 2 声道，DAI `cs35l36-pcm`；card init 把左声道的 `Channel Mux` 设为 RX1、右声道设为 RX2。CS35L36 由 codec 的 I2S4 提供 LRCLK，内部 PLL 可以保持未锁定，驱动不再把它当严重错误打印。
 
 ## 驱动结构
 
@@ -44,21 +50,21 @@ L410 的声卡由四部分组成：外置 codec 海思 Hi6405，把 codec 接到
 | `hi64xx_irq_driver` | `hisilicon,hi64xx-irq` | 厂商，改用主线 irq_domain/wakeup_source | codec 中断复用 |
 | `hi6405_codec_driver` | `hisilicon,hi6405-codec` | 厂商 codec/ 目录（DA_combine_v5，单 kcontrol "PC" 模式） | ASoC component 和 DAI `DA_combine_v5-audio-dai`，新增 DAI `DA_combine_v5-s4-dai`（I2S4 到功放）；MBHC 耳机检测接到 ASoC jack |
 | `asp_pcm_driver` | `hisilicon,hi64xx-asp-dma` | 新写，替换 asp_dma + pcm_codec + slimbus_dai | ASoC component `asp-pcm` 和 CPU DAI `slimbus-dai`：放音 2 声道，录音 1-4 声道，48 kHz，S16_LE/S32_LE（软件转换成 24-in-32 单声道流）；period 固定 960 帧（20 ms），3-32 个 |
-| `hi6405_card_driver` | `hisilicon,hi3xxx-hi6405`（`/sound_hi6405`） | 新写，替换 da_combine_machine | 声卡 "hi6405"：link 0 是 asp-pcm 到 Hi6405；link 1 是 Hi6405 S4 到两颗 TAS2562（codec-to-codec，48 kHz/16 位/2 声道，I2S，codec 出时钟） |
+| `hi6405_card_driver` | `hisilicon,hi3xxx-hi6405`（`/sound_hi6405`） | 新写，替换 da_combine_machine | 声卡 "hi6405"：link 0 是 asp-pcm 到 Hi6405；link 1 是 Hi6405 S4 到两颗功放（codec-to-codec，I2S，codec 出时钟）。TAS2562 用 48 kHz/16 位/2 声道，CS35L36 用 48 kHz/32 位/2 声道 |
 
-card 的 link init 按厂商功放配置（`tas2562_tas2562_configs.xml`）设 TDM 槽（左/右）、放大等级 0x1c、5 个初始化寄存器，以及空闲静音阈值（见下文）。
+card 的 link init 按实际板型分支：TAS2562 按厂商配置（`tas2562_tas2562_configs.xml`）设 TDM 槽（左/右）、放大等级 0x1c、5 个初始化寄存器与空闲静音阈值；CS35L36 设左右 `Channel Mux`（RX1/RX2），其余交给主线的 `cs35l36` DAPM。
 
 去掉的厂商代码：HiFi DSP/OM/VAD、dsm/rdr 黑匣子、powerkey 联动、多 kcontrol 模式、rear jack 和 USB 模拟耳机、看门狗、IV 反馈路由、hi6403 等其他 codec 的分支。
 
 构建输入：
 
-- `l410/configs/80-audio.config`：SOUND/SND/SND_SOC、TAS2562、REGMAP_I2C、HWSPINLOCK、SND_SOC_HI6405_L410，全部内建。
-- `l410/dt/fixups.d/80-audio.dtsi`：reserved-memory `hifi-data@26780000`（0x580000，no-map）给 ASP DMA 缓冲；codec_controller 补 `clocks`（codecssi、pmuaudioclk）、`reset-gpios`、pinctrl（default/idle）；hi6405_codec 补 `hs-type-gpios`；禁用旧的独立 SSI 节点 `/codecssi`（寄存器已归 codec_controller）；slimbusmisc 补 `clocks`（pmuaudioclk、asp_subsys）；ASP DMA 节点补 `memory-region`、`clocks`、`#sound-dai-cells`；smartpa@4C/4E 改成 `ti,tas2562`，加 `sound-name-prefix` Left/Right 和 `shutdown-gpios`，删掉厂商子节点；`/sound_hi6405` 补 `model = "HUAWEI L410"` 和 asp-pcm、codec、功放的 phandle。
+- `l410/configs/80-audio.config`：SOUND/SND/SND_SOC、TAS2562、CS35L36、REGMAP_I2C、HWSPINLOCK、SND_SOC_HI6405_L410，全部内建。
+- `l410/dt/fixups.d/80-audio.dtsi`：reserved-memory `hifi-data@26780000`（0x580000，no-map）给 ASP DMA 缓冲；codec_controller 补 `clocks`（codecssi、pmuaudioclk）、`reset-gpios`、pinctrl（default/idle）；hi6405_codec 补 `hs-type-gpios`；禁用旧的独立 SSI 节点 `/codecssi`（寄存器已归 codec_controller）；slimbusmisc 补 `clocks`（pmuaudioclk、asp_subsys）；ASP DMA 节点补 `memory-region`、`clocks`、`#sound-dai-cells`；smartpa@4C/4E 改成 `ti,tas2562`，加 `sound-name-prefix` Left/Right 和 `shutdown-gpios`，删掉厂商子节点；smartpa@50/52 改成 `cirrus,cs35l36`，加 `VA`/`VP` fixed regulator、active-low `reset-gpios`、GPIO274/275 中断和 `cirrus,boost-*` 参数；`/sound_hi6405` 补 `model = "HUAWEI L410"`、asp-pcm、codec 以及两组功放的 phandle。
 
 ## 控件和 UCM
 
 - 选路开关（厂商单 kcontrol 模式）：`Speaker Playback Switch`、`Headset Playback Switch`、`Mic Capture Switch`（4 个 DMIC）、`Headset Mic Capture Switch`，另有几个蓝牙相关的。card 另有 pin switch `Speaker Switch`、`Internal Mic Switch`。
-- 功放：`Left/Right ASI1 Sel`、`Left/Right Digital Volume Control`、`Left/Right Amp Gain Volume`。
+- 功放：TAS2562 是 `Left/Right ASI1 Sel`、`Left/Right Digital Volume Control`、`Left/Right Amp Gain Volume`；CS35L36 是 `Left/Right AMP Enable Switch`、`Left/Right BOOST Enable Switch`、`Left/Right Channel Mux`、`Left/Right Digital/Analog PCM Volume`。UCM 的 Speaker 设备会同时设置两套里存在的控件，不存在的那套被忽略。
 - jack：`Headphone Jack`、`Headset Mic Jack`（MBHC 报 SND_JACK_HEADSET 加 4 个按键）。
 - DAPM：AIF widget 绑到 DAI 流名，D1_D2_INPUT 对 "Playback"，U1..U4_OUTPUT 对 "Capture"，S4_TX_OUTPUT 对 "S4 TX"。HSMICBIAS 从 DAPM_MIC 改成 DAPM_SUPPLY（主线 DAPM 不让 MIC widget 当中间节点）。
 
@@ -114,11 +120,11 @@ sudo alsactl store
 
 如果某个 6.18 问题"突然"出现、连旧内核也复现，先看中间是不是进过 Kylin（`journalctl --list-boots` 的空档），再查驱动有没有依赖从没初始化过的内存或寄存器（reserved-memory 保留区、ASP_CFG、常开域模块）。
 
-## TAS2562 的状态位
+## 功放状态位
 
 - INT_LTCH0 bit2 是 TDM 时钟错误：I2S 时钟起停前后功放还在工作就会锁存。播放中实时寄存器为 0，所以测试里只报告、不算失败。真正的故障是过温/过流（bit0/1）和欠压/过压/brown-out（0x25 bit1-3）。这个锁存位读了不清零（要写 INT_CLK 0x30 的 INT_CLR_LTCH），所以 `amps` 里一直显示 0x04。
 - 时钟错误持续超过 CLK_HALT_TIMER（INT_CLK 默认 52 ms）后，功放自己进入关断（PWR_CTRL 读回 0x0e），时钟恢复了也不会自己醒，要等下一次 DAPM 上电。厂商的 smartpakit 有中断处理，会重新初始化功放；6.18 没有。
-- **KLVU-WDU0 的 CS35L36 功放还没有 6.18 驱动**：当前只支持 WDU0B 的 TAS2562。WDU0 上 6.18 会跳过扬声器 link，扬声器无声；要用扬声器需要给 0x50/0x52 接主线的 `cs35l36` 驱动（32 位寄存器、`VA`/`VP` 电源、GPIO274/275 中断、每颗的 channel mux 和厂商的 boost 参数），再让 card 按实际焊的板型选 DAI link。
+- **CS35L36 的内部 PLL 在 6.18 下可能显示未锁定**：L410 用 codec 的 I2S4 LRCLK 当时钟，放大器照常出声，驱动已把这条从 `dev_crit` 降为 `dev_dbg`。
 - 采样率本身没问题：播放中 TDM_DET = 0x24（48 kHz，64 fs），PipeWire 没有 xrun（`pw-top` ERR = 0）。
 
 ## 检查方法
@@ -129,18 +135,18 @@ aplay -l; arecord -l                                  # 卡 hi6405
 alsaucm -c hi6405 list _verbs                         # HiFi
 amixer -c hi6405 cget name='Left Digital Volume Control'   # 110
 cat /proc/asound/card0/pcm0p/sub0/status              # 放音时 appl_ptr - hw_ptr 始终为正
-sudo cat /sys/kernel/debug/hi6405-card/amps           # 两颗功放的 PWR_CTRL、PB_CFG1、TDM_CFG2、中断状态/锁存（绕过 regcache 直接读）
+sudo cat /sys/kernel/debug/hi6405-card/amps           # 两颗功放的状态（TAS2562 或 CS35L36，绕过 regcache 直接读）
 ```
 
 debugfs 里还有：`/sys/kernel/debug/hi6405/registers` 按厂商 `/proc/audio/rr` 的格式（`w 0x%08X 0x%08X`）导出 IO/CFG/ANA/DIG 页，能直接和厂商内核的输出 diff，写 `"<reg> <val>"` 可以改寄存器；`/sys/kernel/debug/asoc/hi6405/` 是 DAPM widget 状态；`/sys/kernel/debug/asp-pcm/{dmac,asp_cfg}` 见上文。
 
-`tests/audio.sh`（root，需要 alsa-utils、python3，没人听也能跑）：dmesg 里有 `Hi6405 version 0x11`；没有音频设备停在 deferred；声卡 hi6405、`pcmC*D0p/c`、关键控件都在；扬声器放 4 s -30 dBFS 1 kHz，查 aplay 成功、hw_ptr 前进、ASP DMA 中断 ≥ 150 次、DAPM（AUDIO_PLAY_DRV、Speaker Playback、S4_TX_DRV）上电、两颗功放 PWR_CTRL 为工作态且无过温/过流/欠压；耳机开关放 2 s；DMIC 录 3 s，按峰值和取值种类判断不是静音；打印 jack 状态（插拔没人做时 SKIP）。寄存器、DAPM、功放状态导出到 `$AUDIO_DUMP_DIR`（默认 `/tmp/l410-audio`）。
+`tests/audio.sh`（root，需要 alsa-utils、python3，没人听也能跑）：dmesg 里有 `Hi6405 version 0x11`；没有音频设备停在 deferred；声卡 hi6405、`pcmC*D0p/c`、关键控件都在；扬声器放 4 s -30 dBFS 1 kHz，查 aplay 成功、hw_ptr 前进、ASP DMA 中断 ≥ 150 次、DAPM（AUDIO_PLAY_DRV、Speaker Playback、S4_TX_DRV）上电、两颗功放为工作态（TAS2562 看 PWR_CTRL，CS35L36 看 PWR_CTRL1/AMP_OUT_MUTE）；耳机开关放 2 s；DMIC 录 3 s，按峰值和取值种类判断不是静音；打印 jack 状态（插拔没人做时 SKIP）。寄存器、DAPM、功放状态导出到 `$AUDIO_DUMP_DIR`（默认 `/tmp/l410-audio`）。
 
-`tests/quick.sh --only audio` 另外查功放音量读数和 `asound.state` 里存的功放音量（都应 > 0）、SLIMbus 空闲时 runtime suspended、UCM、PipeWire 默认输出是 hi6405、放音结束 0.6 s 后两颗功放都已关断。
+`tests/quick.sh --only audio` 另外查 SLIMbus 空闲时 runtime suspended、UCM、PipeWire 默认输出是 hi6405、放音结束 0.6 s 后两颗功放都已关断；TAS2562 还查数字音量读数和 `asound.state` 里存的音量（都应 > 0），CS35L36 跳过这两项。
 
-`tests/audio-ampwatch.py [秒数]`（root）：只读监视两颗功放，用 I2C_RDWR 原子读，不写页寄存器，不打乱内核 regmap 的页缓存，每 5 ms 打印 PWR_CTRL、TDM_DET、中断位的变化。验证爆音修复时，一边跑它一边放一段有停顿的声音，再等流停掉：停流时应先看到 PWR=0e，约 20 ms 后才出现 TDM_DET 无效，LIVE0 不再出现 0x04。
+`tests/audio-ampwatch.py [秒数]`（root）：只读监视两颗 **TAS2562**，用 I2C_RDWR 原子读，不写页寄存器，不打乱内核 regmap 的页缓存，每 5 ms 打印 PWR_CTRL、TDM_DET、中断位的变化。验证爆音修复时，一边跑它一边放一段有停顿的声音，再等流停掉：停流时应先看到 PWR=0e，约 20 ms 后才出现 TDM_DET 无效，LIVE0 不再出现 0x04。CS35L36 是 32 位寄存器，这个脚本不适用。
 
-参考数值：扬声器放音时 hw_ptr 0.5 s 前进 24000 帧（正好 48 kHz），4 s 内 ASP DMA 中断 201 次（20 ms 一个 period）；功放 PWR_CTRL=0x0c（工作，I/V sense 关），实时中断寄存器 0x1f/0x20 全 0；安静房间里 DMIC 录音两个声道峰值约 110-128、RMS 约 32。
+参考数值：扬声器放音时 hw_ptr 0.5 s 前进 24000 帧（正好 48 kHz），4 s 内 ASP DMA 中断 201 次（20 ms 一个 period）。TAS2562 放音时 PWR_CTRL=0x0c（工作，I/V sense 关），实时中断寄存器 0x1f/0x20 全 0；CS35L36 放音时 PWR_CTRL1=0x1、AMP_OUT_MUTE=0、ASP_RX1_SLOT 左 0 右 1。安静房间里 DMIC 录音两个声道峰值约 110-128、RMS 约 32；用内置麦验证扬声器时 1 kHz Goertzel 电平约 0.1 以上。
 
 用内置麦克风判断扬声器有没有出声时，先看 `wpctl get-volume @DEFAULT_AUDIO_SINK@`：输出音量很低（比如 5%）时这类检查会误判失败。
 
@@ -149,9 +155,9 @@ debugfs 里还有：`/sys/kernel/debug/hi6405/registers` 按厂商 `/proc/audio/
 ## 已知问题
 
 - 耳机/耳麦插拔、线控按键、耳麦录音需要人插耳机验证；UCM 的耳机切换也一样。
-- 每次时钟起停后功放留一个锁存的时钟错误位。启动时约 10 ms 的时钟错误是预期内的：功放比帧时钟早几毫秒上电，等时钟有效后自己淡入。
-- 时钟错误超过 52 ms 后功放会自己关断，6.18 没有厂商那样的中断处理把它叫醒，要等下一次放音。
+- 上面两条 TDM 时钟错误/自动关断只针对 TAS2562（WDU0B）。CS35L36（WDU0）没有这个问题；它的内部 PLL 可能显示未锁定，只打在 debug 级别。
 - TAS2562 的 I/V sense 反馈（厂商用在喇叭保护算法里）没用上；放大等级按厂商 0x1c。
+- CS35L36 只用了主线驱动的 boost/Class-H 默认配置，没有移植厂商 smartpakit 的完整喇叭保护算法；I/V sense 反馈也没接。
 - 厂商初始化里 B0_P253 的 ICN 修正位、Book100 P7 的 Class-H "kink" 修正，在上游 regmap 范围（book 0、page 0-4）以外，没写。B0_P1 0x08（厂商关掉了热折返）在范围内，有意没写，保留热保护。
 - drain 最多截掉末尾 40 ms（见上文），只影响直接 drain 设备的程序。
 - **DP/HDMI 音频已实现**：在 Linux 6.18 中，由 `kirin990_dp.c` 驱动通过 DRM HDMI Audio Helper (`drm_connector_hdmi_audio_init`) 注册 `hdmi-audio-codec` 平台设备，并在 DWC DP TX 寄存器（`0xf8500000`）配置硬件音频封包（SDP 音频流、时间戳发生器与 CEA-861 InfoFrame）；ASoC 机器驱动 `sound/soc/hisilicon/hi6405/hisi_dp_card.c` 动态匹配该编解码器，绑定标准 I2S 格式并注册声卡 **Card 1: `hisihdmi`**（PCM 设备 `01-00: HDMI Audio i2s-hifi-0`，并带有 HDMI Jack、ELD 与 IEC958 控件）。实机自测 100% 验证通过。
