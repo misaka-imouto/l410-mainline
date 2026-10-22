@@ -169,7 +169,7 @@ SUBSYSTEM=="huawei_fp", MODE="0660", GROUP="input"
    register_agent_to_tee: register agent to tee failed, ret = -1
    ```
 
-   `GLOBAL_CMD_ID_REGISTER_AGENT` 一直返回未完成，10000 次后超时；fs/misc agent 注册不上，teecd 就起不来。下一步要对比 4.19 的 `tc_ns_smc_cmd` 字段、`GLOBAL_CMD_ID_REGISTER_AGENT` 参数和 mailbox 物理地址，确认是 SMC 命令布局还是 agent buffer 在 TEE 侧不可访问。
+   `GLOBAL_CMD_ID_REGISTER_AGENT` 一直返回未完成，10000 次后超时；fs/misc agent 注册不上。实测 teecd 进程现在能起来并停在那里等待（不再立刻退出），但直接启动 `/opt/uos-fp/bin/fingerprint_daemon` 后进程很快消失，DBus 上没有 `com.huawei.Fingerprint`。下一步要对比 4.19 的 `tc_ns_smc_cmd` 字段、`GLOBAL_CMD_ID_REGISTER_AGENT` 参数和 mailbox 物理地址，确认是 SMC 命令布局还是 agent buffer 在 TEE 侧不可访问。
 
 在这一步之后，才是启动 `/vendor/bin/teecd` 和 `/opt/uos-fp/bin/fingerprint_daemon`，确认 DBus `com.huawei.Fingerprint`，再做 PAM。`system/fingerprint/` 里的 udev 规则和服务文件已经准备好。
 
