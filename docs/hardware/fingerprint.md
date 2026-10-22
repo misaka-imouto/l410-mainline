@@ -382,6 +382,39 @@ cmd_id  = 2      login.method = 7      param_types = 0x1
 
 在这之后才是：确认 DBus `com.huawei.Fingerprint`、把 `deepin-authenticate`/PAM 接上。
 
+### 6.6 队列条目布局：`cmd_type` 必须是 u8（linux-l410 `798e8f783`）
+
+4.19 内核交给 `tc_ns_smc()` 的结构体在 `+16` 处是一个**单字节** `cmd_type`，
+所以 `cmd_id` 在 `+17`、`dev_file_id` 在 `+21`；6.18 原来是 u32，`cmd_id` 在 `+20`，
+整个前缀在共享队列里错位 3 字节。改成 u8 后：
+
+- 空闲的 `SET_SERVE_CMD` 不再空转到 10001 次重试上限（原来每次约 37 秒），
+  现在立刻完成并被重新发起；
+- `fingerprint_daemon` 不再永久卡在第一条 SMC 上，会像 vendor 栈那样重试 TA 加载。
+
+对齐后的行为（6.18，`g_cmd_data->in[]` 里的字节已经和 4.19 一致）：
+
+```text
+cmd_type = 1（Kirin 990 上 CMD_TYPE_GLOBAL 要发 1，其枚举里 TA 在前）
+cmd_id   = 5 (NEED_LOAD_APP)   dev_file_id = 6
+nsid     = 0                   vmid = 0
+```
+
+但 `NEED_LOAD_APP` 仍然不被 TEEOS 完成（`out_bitmap` 对应位始终不置），
+所以 open session 还差这一步。下一个怀疑点已经很具体：
+
+- `struct tc_ns_smc_queue` 的布局是 `in_bitmap / doing_bitmap / out_bitmap /
+  in[18] / out[18]`，`out[]` 的偏移由 `sizeof(struct tc_ns_smc_cmd)` 决定。
+  4.19 的结构体看起来是 **104** 字节（`pid` 结束于 81，后面还有保留字段），
+  6.18 改成 u8 之后是 **109** 字节 —— `out[]` 起点会差 5×18=90 字节，
+  TEE 写结果的位置和我们读的位置可能对不上。
+- 验证方法：从 4.19 的 `smp_smc_send` / `occupy` 路径反汇编出
+  `sizeof(tc_ns_smc_cmd)` 和 `out[]` 的偏移，然后把 6.18 的结构体尾部
+  （`nsid`/`vmid`/`eventindex`/`res_int[3]`/`started`/`res_chr[3]`）裁到同样大小。
+- 另一条线索：`NEED_LOAD_APP` 之后 TEE 可能要通过 LOAD agent 走事件通道
+  （`agent call count: 0` 说明没有 agent 事件在等待，所以先确认 TEE 是否真的
+  收到了这条命令）。
+
 ## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
