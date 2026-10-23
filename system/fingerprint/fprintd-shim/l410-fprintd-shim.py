@@ -473,7 +473,10 @@ class Device:
             # not a valid finger name and pam_fprintd flags it as unexpected.
             enrolled = self.state.fingers(self.state.claimed_by)
             finger = enrolled[0] if enrolled else "right-index-finger"
-        self._emit("VerifyFingerSelected", "(s)", (finger,))
+        # Emit asynchronously: pam_fprintd ignores signals that arrive before
+        # its VerifyStart() call returns ("Unexpected VerifyFingerSelected"),
+        # which kept the lock screen out of its scan-prompt state.
+        GLib.idle_add(self._emit, "VerifyFingerSelected", "(s)", (finger,))
         self.state.worker = threading.Thread(
             target=self._verify_worker, args=(finger,), daemon=True)
         self.state.worker.start()
