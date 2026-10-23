@@ -430,7 +430,8 @@ class Device:
         else:
             log("enroll failed (result=%d)" % result)
             self._emit("EnrollStatus", "(sb)", ("enroll-failed", True))
-        self.state.action = None
+        # Keep state.action until EnrollStop/Release: fprintd clients call
+        # *Stop right after the final status and expect it to succeed.
 
     # ---- verify --------------------------------------------------------
     def _start_verify(self, finger):
@@ -454,18 +455,31 @@ class Device:
             log("Identify failed: %s" % e.message)
         if self.state.cancel.is_set():
             log("verify cancelled")
-            self.state.action = None
             return
         log("identify result=%d (%s)" % (result, finger))
         if result == 0:
             self._emit("VerifyStatus", "(sb)", ("verify-match", True))
         else:
             self._emit("VerifyStatus", "(sb)", ("verify-no-match", True))
-        self.state.action = None
+        # state.action stays set until VerifyStop, see _enroll_worker.
 
     def _stop_action(self):
         self.state.cancel.set()
         self.state.action = None
+        worker = self.state.worker
+        if worker is not None and worker.is_alive():
+            # The TA's Identify blocks until a finger arrives; only Close()
+            # makes the daemon cancel its worker thread, otherwise the daemon
+            # stays "busy" and the next attempt fails.  Claim() re-opens the
+            # session, so it is safe to drop it here.
+            threading.Thread(target=self._abort_session, daemon=True).start()
+
+    def _abort_session(self):
+        try:
+            hw_int(self.conn, "Close", None, 10000)
+            log("session closed to abort the running action")
+        except GLib.Error as e:
+            log("Close failed: %s" % e.message)
 
     # ---- properties ----------------------------------------------------
     def properties(self):
