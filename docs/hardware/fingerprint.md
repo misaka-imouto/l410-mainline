@@ -1085,6 +1085,26 @@ sudo grep -a primary_indices_count /var/log/fp_kirin/fp_hal.log | tail -1
 ```
 
 
+**HAL 层逆向结论（2026-10-23 静态分析，供下一步用）**
+
+- `libhwFingerprint.so` 里有一个驱动 ops 表（全局指针 + 0x40 偏移），
+  `[+72]` = get_num、`[+80]` = delete：
+  - `CommonDriverGetFpNum(dev, int *num)`：只校验 `dev != NULL`（值本身不用），
+    然后调 `[+72]`、把结果写进 `*num`，返回 0 或 -1。**这是只读的，可以先用它验证 ABI。**
+  - `CommonDriverDeleteFp(dev, X)`：校验两个参数非 NULL，然后 `mov x0, X; br [+80]`
+    —— 也就是把第二个参数**原样**当作驱动删除函数的第一个实参传进去。
+    所以 X 可能是整数 id，也可能是指针；`l410-fp-del` 目前按指针传，
+    实测前要先确认（这也是它被标成"未验证"的原因）。
+- `Device_Delete_Fingerprint(x)`（`DeviceDeleteFingerprintInit` + `opendir/readdir`）
+  做的是**扫描并清理 NS 侧模板库目录**，不是发 TA 删除命令，所以它单独用没用。
+- 真正发给 TA 的是 `fpc_tac_delete_fingerprint_set()` →
+  `fpc_tac_send_delete_fingerprint_set()`（`libfingerprint.so` 导出）。
+
+**结论**：删指纹仍然要"在机主在场 + 先备份 `/data/sec_storage_data`"的前提下试
+`l410-fp-del`；如果 `--list` 的 ABI 不对，就先修 `--delete` 的参数形态再动。
+考虑到旧模板本身无害（那根手指也能解锁），这件事排在锁屏/PAM 回归之后。
+
+
 ## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
