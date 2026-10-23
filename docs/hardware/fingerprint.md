@@ -973,6 +973,44 @@ Fingerprints for user zhtsg on Huawei L410 power-button sensor (iTrustee TA) (pr
 ```
 
 
+#### 6.20.1 KDE 设置里"添加指纹"可用；两条踩坑记录
+
+**KDE 侧实测通了**：Plasma 6.3.6 的 Users KCM（`kcm_users.so` 引用
+`EnrollStart`/`VerifyStart`/`ListEnrolledFingers`）能看到设备、能 `Claim` 并
+`EnrollStart`，替身日志里每次调用都清晰可见：
+
+```
+device call Claim('') from zhtsg
+device call EnrollStart('right-middle-finger') from zhtsg
+```
+
+**踩坑 1（替身 bug，已修）**：`_enroll_worker` 里 `finally: cancel.set()` 先置位，
+后面又用 `not cancel.is_set()` 判断成功，导致**录入真的到 100% 也永远发不出
+`enroll-completed`**，KDE 就一直显示"录入中"。修法：先读一次 stop 标志再置位。
+daemon 侧的日志可以确认真录成功了：`fp_enroll_e100_handle` → `fpc_tac_end_enrol`
+→ `fp_enroll_result_handle completed`，SFS 里的模板库从 70848 涨到 86208 字节。
+
+**踩坑 2（无法删除已录入指纹）**：重复录同一根手指时 daemon 报
+`[Huawei Enroll Fingerprint] template already exist! result = 4`。厂商这套栈
+**没有任何删除入口**：
+
+- D-Bus 方法全表（从 `fingerprint_daemon` 的 vtable 字符串按序取出）：
+  `StartSession / DeviceProperties / ClearPovImage / SearchDevice / GetStatus /
+  Close / Reload / Enroll / IdentifyWithMultipleUser / Identify` —— 没有
+  Delete，也没有 List。
+- `Reload(int)` 只是"刷新模板库"（`HuaweiRefreshFingerprint()` 把 int 原样传给
+  `CommonDriverRefreshTemplate()`，那个函数根本不读参数），实测 0/1/2/3/4/5/99
+  全部返回 `-4`，模板文件数不变。
+- 模板的权威副本在 TEE 里：删掉 `/data/sec_storage_data/fp/data/fpc/*` 后，
+  daemon 重启会**连 mtime 一起原样恢复**；连重启（TEE 缓存清空）之后仍然是
+  原始文件 —— NS 侧那份只是镜像。
+- 真正的删除在 Android HAL 层：`CommonDriverDeleteFp` /
+  `Device_Delete_Fingerprint`（`libhwFingerprint.so` 导出）→
+  `fpc_tac_send_delete_fingerprint_set`（TA 命令）。UOS 的控制中心走的是 HAL
+  （binder）那条路。要做"删指纹"要么写个调 `libhwFingerprint` 的小工具
+  （需先停 daemon 让出 TA 会话），要么逆向 TA 的删除命令。
+
+
 ## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：

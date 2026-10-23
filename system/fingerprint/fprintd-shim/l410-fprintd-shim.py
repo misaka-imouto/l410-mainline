@@ -224,6 +224,7 @@ class Manager:
         self.conn = conn
 
     def handle(self, method, params, invocation):
+        log("manager call %s" % method)
         if method == "GetDevices":
             invocation.return_value(GLib.Variant("(ao)", ([DEVICE_PATH],)))
         elif method == "GetDefaultDevice":
@@ -281,6 +282,10 @@ class Device:
             invocation.return_dbus_error(ERROR_PREFIX + "Internal", repr(e))
 
     def _handle(self, method, params, invocation):
+        log("device call %s%s from %s" % (
+            method,
+            params.print_(True) if params is not None else "",
+            self._caller_user(invocation)))
         if method == "Claim":
             (username,) = params.unpack()
             user = self._resolve_user(invocation, username)
@@ -410,18 +415,21 @@ class Device:
                             30 * 60 * 1000)
         except GLib.Error as e:
             log("Enroll failed: %s" % e.message)
-        finally:
-            self.state.cancel.set()
+        # Read the stop flag before we set it ourselves: setting it here only
+        # stops the log watcher, it must not turn a successful enrollment into
+        # a "cancelled" one (that bug kept KDE waiting forever).
+        cancelled = self.state.cancel.is_set()
+        self.state.cancel.set()
 
-        if result == 0 and not self.state.cancel.is_set():
+        if cancelled:
+            log("enroll cancelled (result=%d)" % result)
+        elif result == 0:
             self.state.add(user, finger)
             log("enrolled %s for %s" % (finger, user))
             self._emit("EnrollStatus", "(sb)", ("enroll-completed", True))
         else:
-            log("enroll failed (result=%d, cancelled=%s)"
-                % (result, self.state.cancel.is_set()))
-            if not self.state.cancel.is_set():
-                self._emit("EnrollStatus", "(sb)", ("enroll-failed", True))
+            log("enroll failed (result=%d)" % result)
+            self._emit("EnrollStatus", "(sb)", ("enroll-failed", True))
         self.state.action = None
 
     # ---- verify --------------------------------------------------------
