@@ -16,6 +16,14 @@
 
 ## 已知缺陷
 
+- ~~tzdriver 的 `ipihelper` 内核线程永久 D 态~~（v6.18.54-l410.3 已修）：`kthread_create_worker()`
+  之后用 `tz_kthread_bind_mask()` 绑定未启动的线程，`kthread_bind_mask()` 内部
+  `wait_task_inactive(TASK_UNINTERRUPTIBLE)` 会把它留在无唤醒的睡眠里（`siqthread` 之所以正常
+  是因为绑定后紧跟一句 `wake_up_process()`，`ipihelper` 漏了）。症状：每 ~2 分钟一条 hung task
+  警告、suspend 时 "Freezing remaining freezable tasks failed"、以及内核日志被上千条
+  `SMCSTAT` error 行淹没（正常协议就是一 tick 一次 PREEMPTED 重试）。
+
+
 - 看门狗（v6.18.54-l410.1 已修）：固件在进内核前已经启动 AP 看门狗 WDT0（SP805，0xfe026000），交给内核时约剩 60 s，中断经 BL31 转成 FIQ。
   v6.18.54-l410 带 `l410_deadman=0` 启动会在开机约 60 s 时 panic（"FIQ taken without a root FIQ handler"）。v6.18.54-l410.1 的内核开机就接管并停掉它。
   为了让旧版内核也能用，`boot/install-kernel.sh` 仍会去掉 `l410_deadman=0`，`system/hardware/l410-watchdog-off.service` 开机后再停一次，对新内核没有影响。
@@ -27,7 +35,15 @@
 - UFS：`rpm_lvl=5`（运行时让器件断电）恢复后第一次 auto-hibern8 退出会失败一次，170 ms 后自动恢复。默认的 `rpm_lvl=1` 碰不到。
 - WiFi：开机校准偶尔要 9 秒；蓝牙串口（BUART）走 PIO，没有 DMA；驱动不能卸载；PCIe RC1 一旦 completion timeout 不会自己恢复。
   NetworkManager 每次连接时第一次 connect 会被拒，重扫后成功，多花约 1 秒。
-- 指纹：内核节点、TA 加载都正常，但 PAM 还不可用。`/dev/fingerprint` 没有图像/匹配接口，不能直接写 libfprint 后端；厂商 `teecd`/`fingerprint_daemon` 已能复制到 Debian，TEE agent 白名单和 `remap_pfn_range` 锁已修，teecd 能过路径/白名单检查，但 `GLOBAL_CMD_ID_REGISTER_AGENT` 在 TEE 侧一直不完成（fs/misc agent 注册超时），teecd 还起不来。见 [hardware/fingerprint.md](hardware/fingerprint.md)。
+- 指纹：**端到端可用**。TEE 网关、TA、SFS 模板存储、录入、识别、KDE 设置的录入/识别、
+  `fprintd` 接口（替身服务 `net.reactivated.Fprint`）和 `sudo` 指纹都已实机验证。
+  细节见 [hardware/fingerprint.md](hardware/fingerprint.md) §6.17~6.20。
+  还剩三件小事：① 已录入的旧模板删不掉（厂商 D-Bus 没有删除/列举接口，删除只在
+  Android HAL 的 `remove()` → TA `fpc_tac_send_delete_fingerprint_set`，工具
+  `l410-fp-del` 已写好但未实机运行）；② KDE 6.3 锁屏没有 UOS 那种指纹/密码 tab，
+  指纹成功由替身 `loginctl unlock-session` 兜底解锁；③ SDDM 登录界面仍是纯密码。
+  另外开机后第一次 TA open session 可能以 `0xFFFF6004` 失败一次，daemon 自己重试，
+  指纹可用时间因此晚约 14 秒（见下）。
 - 音频：耳机插拔和线控需要人工验证；每次时钟启停后功放会锁存一个时钟错误位（不影响出声）；
   流开始时功放比 I2S 时钟早约 10 ms 上电（声音是淡入的，听不出来）。
   **功放有板型差异**：`KLVU-WDU0B` 是 TAS2562（I2C 0x4c/0x4e），`KLVU-WDU0` 是 CS35L36（0x50/0x52）。6.18 两种都支持，card 按实际 probe 成功的那一对创建扬声器 link；当前远程 `L410 KLVU-WDU0` 的 CS35L36 已实测出声。CS35L36 的内部 PLL 可能显示未锁定，只打在 debug 级别。见 [hardware/audio.md](hardware/audio.md)。
