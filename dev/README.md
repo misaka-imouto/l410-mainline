@@ -41,7 +41,8 @@ build ──► bundle ──scp──► Debian 分区 /boot/l410/
 | `deb-install.sh` | 机器不通外网时，在 PC 下载 deb 再到 Debian 上装 |
 | `quick-remote.sh`、`suite-remote.sh`、`mk-suite.sh` | 远程跑 `tests/quick.sh`，或把几个子系统测试拼成一个套件交给 harness |
 | `t2-run.sh` | 一键集成回归：quick、桌面配置、内存、性能、各子系统、诊断包，可选烤机和重启循环 |
-| `testrig-nosleep.sh` | 测试期间关掉 PowerDevil 空闲自动睡眠（`restore` 恢复） |
+| `testrig-nosleep.sh` | 测试期间关掉 PowerDevil 空闲自动睡眠（`restore` 恢复）。**远程调试必跑**：s2idle 没有 WoWLAN，机器一睡就从网络上消失，只能等人按键 |
+| `deploy-remote.sh` | 一条命令把 `l410-build/bundle` + `tests/` 推到远程机、装内核、`l410-setne`、重启、等 ssh、可选跑 quick 套件（`--keep-awake` 顺手关掉空闲睡眠） |
 | `forky-upgrade.sh` | 把已有的 Debian 13 trixie 原地升级到 forky（带备份、检查）。新装的系统直接就是 forky，用不到 |
 | `compat-index.sh`、`compat-summary.py` | 移植前统计厂商 4.19 源码里新内核已删除的接口用法 |
 | `bringup/` | 各子系统起步阶段的探测脚本和 initramfs 附加脚本（`*-repack-initrd.sh` 把探测脚本塞进 initramfs） |
