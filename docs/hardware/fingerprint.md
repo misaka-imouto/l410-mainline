@@ -740,7 +740,34 @@ smc_cmd/operation（尤其是 `params[0].value` 和 `started`），和 6.18 对�
 - 尚未做真实按压（需要物理接触传感器）来验证录入/识别；
 - 需要把 `/data` 挂载与 teecd/daemon 的启动做成可复现的开机流程。
 
-## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
+### 6.16 SMC 抢占性能 + 录入到达"手指检测"阶段
+
+**SMC 修复（linux-l410 `546af3607`）**：厂商 `send_smc_cmd_with_retry()` 只在
+不可抢占内核上调 `cond_resched()`，而 `smp_smc_send()` 无条件调用。本内核
+`CONFIG_PREEMPT=y` / `HZ=250`，于是每次 `PREEMPTED` 重试都睡到下一个 4ms tick：
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| `cmd 0x1b` 等命令 | 重试 935~3435 次，3.7~13.6s | 重试 1~2 次，100~166µs |
+
+给 `smp_smc_send()` 加上和厂商一致的条件后，`smc_svc_thread` 路径的命令变成
+微秒级。**但 daemon 上下文里发的 `cmd 0`（`fpc_tac_init_lib`）仍然慢**：
+`SMCSTAT cmd=0x0 retries≈2900 us≈11s`，且时快时慢、偶发失败重试，是下一步
+要查的点（同样的 TEE 命令，从内核线程发就快，从 daemon ioctl 上下文发就慢）。
+
+**标定文件是必需的**：`/data/sec_storage_data/fp/sec_storage_data/fp/calibration`
+下的两份 80KB 文件不能删——删掉后 TA 的 `cmd 0` 直接失败
+（`codes=0xffff0000 origin=2`），`cmd 41` 也失败，daemon 无法 init。
+
+**录入进展**：SMC 修好后 daemon 能秒级到 `worker idle`，
+`DeviceProperties → ib 1 true`、`SearchDevice → b true`、`GetStatus → i 0`；
+`fingerprintctl enroll` 能进入 `wait_finger_down → capture_image`，触摸被接受
+（`enroll count` 累加到 2、4）。卡住的地方变成
+`fpc_tac_check_finger_lost` 一直返回 **5（手指仍在）**，抬起后也不变 6，
+daemon 因此无限等"手指抬起"。这是传感器/TA 层的手指检测，不是 SMC 性能：
+下一个排查点是采图质量/IRQ 是否被锁存，以及正常录入时 5/6 的切换节奏。
+
+## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
 
