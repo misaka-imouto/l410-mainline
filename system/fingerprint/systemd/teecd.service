@@ -1,0 +1,16 @@
+[Unit]
+Description=iTrustee TEE client daemon (vendor teecd)
+Documentation=file:///usr/share/doc/l410/fingerprint.md
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=simple
+# The UOS vendor libs copied to /opt/uos-fp/lib (libteec.so.1 etc.).
+Environment=LD_LIBRARY_PATH=/opt/uos-fp/lib
+ExecStart=/vendor/bin/teecd
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

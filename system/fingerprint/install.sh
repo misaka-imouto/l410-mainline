@@ -48,6 +48,22 @@ install -D -m 644 "$D/dbus/com.huawei.Fingerprint.conf" /etc/dbus-1/system.d/com
 install -D -m 644 "$D/dbus/com.huawei.Fingerprint.service" /usr/share/dbus-1/system-services/com.huawei.Fingerprint.service
 systemctl reload dbus 2>/dev/null || systemctl restart dbus 2>/dev/null || true
 
+# 4b. The TA's SFS is backed by /data/sec_storage_data on the data partition
+#     (_dde_data, /dev/sdd7 on the L410).  Without it mounted at /data, TA
+#     cmd 0 (fpc_tac_init_lib) never completes and the daemon hangs during
+#     init.  Add the fstab entry if this root has no /data mount yet.
+if ! findmnt -n /data >/dev/null 2>&1; then
+    say "WARNING: /data is not mounted; fingerprint SFS needs it (see docs)"
+fi
+
+# 4c. Install the systemd units and the power-on helper.
+install -D -m 644 "$D/systemd/teecd.service" /etc/systemd/system/teecd.service
+install -D -m 644 "$D/systemd/hwfp_init.service" /etc/systemd/system/hwfp_init.service
+if command -v gcc >/dev/null 2>&1; then
+    gcc -O2 -o /usr/local/sbin/fp_poweron "$D/bin/fp_poweron.c" 2>/dev/null || true
+fi
+systemctl daemon-reload || true
+
 # 5. Enable and start teecd service
 if [ -f "/usr/lib/systemd/system/teecd.service" ] || [ -f "/etc/systemd/system/teecd.service" ]; then
     say "Enabling teecd service (iTrustee client daemon)..."
