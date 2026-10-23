@@ -36,7 +36,9 @@ fi
 # Known failures: "<check-id glob> <plan-id> <reason>". A FAIL on one of these is
 # reported as XFAIL and does not count; a PASS is reported as XPASS.
 KNOWN='
-dsp.edid-size          DSP-08  connector reports 0x0 mm (EDID not read through the bridge)
+ec.mute-led            AUD-12  the EC occasionally answers the mute-LED write with a
+                                status error (3 tries 10 ms apart, then the counter
+                                increments); the LED itself switches fine
 '
 
 MODULES="env sys klog cpu mem soc pmic thermal ufs usb pcie wifi bt display gpu audio input ec perf sec img"
@@ -57,6 +59,9 @@ declare -A DESC=([env]="machine, versions, power state" [sys]="systemd, boot, ro
 
 # ---------------------------------------------------------------- helpers
 rd() { cat "$1" 2> /dev/null; }
+# Huawei OUI prefixes seen on L410 units: the eFuse/EEPROM MACs of the RTL8168,
+# the Hi1103 WiFi and the BT controller all share one of them.
+hw_mac_pref() { case "$1" in 24:81:c7:*|24:81:C7:*|a4:c7:4b:*|A4:C7:4B:*) return 0 ;; *) return 1 ;; esac; }
 has() { command -v "$1" > /dev/null 2>&1; }
 drv_of() { local l; l=$(readlink "$1/driver" 2> /dev/null) && echo "${l##*/}"; }
 in_range() { awk -v v="$1" -v a="$2" -v b="$3" 'BEGIN { exit !(v >= a && v <= b) }'; }
@@ -754,12 +759,20 @@ m_ufs() {
 	[ "$(drv_of $U)" = ufshcd-kirin ] && pass ufs.driver "ufshcd-kirin" || fail ufs.driver "driver '$(drv_of $U)'"
 	x="$(rd $U/power_info/gear) x$(rd $U/power_info/lane) $(rd $U/power_info/mode) $(rd $U/power_info/rate)"
 	[ "$x" = "HS_GEAR4 x2 FAST_MODE HS_RATE_B" ] && pass ufs.link "$x" || fail ufs.link "$x (want HS_GEAR4 x2 FAST_MODE HS_RATE_B)"
-	declare -A want=([0]=8192 [1]=131072 [2]=2621440 [3]=997433344)
+	# The two unit variants ship different UFS modules; LUN0-2 are identical,
+	# only the user-data LUN differs.
+	local model; model=$(rd /sys/bus/scsi/devices/0:0:0:0/model | tr -d ' ')
+	declare -A want=([0]=8192 [1]=131072 [2]=2621440)
+	case "$model" in
+	SDINFDO4-512G) want[3]=997433344 ;;
+	KLUEG8UHDB-C2D1) want[3]=497115136 ;;
+	*) want[3]=-1 ;;
+	esac
 	for lun in 0 1 2 3; do
 		d=/sys/bus/scsi/devices/0:0:0:$lun; blk=$(ls $d/block 2> /dev/null)
-		[ -n "$blk" ] && [ "$(rd /sys/block/$blk/size)" = "${want[$lun]}" ] && [ "$(rd $d/model | tr -d ' ')" = SDINFDO4-512G ] || bad="$bad LUN$lun=${blk:-none}/$(rd /sys/block/$blk/size)"
+		[ -n "$blk" ] && [ "$(rd /sys/block/$blk/size)" = "${want[$lun]}" ] && [ "$(rd $d/model | tr -d ' ')" = "$model" ] || bad="$bad LUN$lun=${blk:-none}/$(rd /sys/block/$blk/size)"
 	done
-	[ -z "$bad" ] && pass ufs.luns "4 LUNs sda-sdd, WDC SDINFDO4-512G, sizes as on the vendor kernel" || fail ufs.luns "$bad"
+	[ -z "$bad" ] && pass ufs.luns "4 LUNs sda-sdd, $model, sizes as on the vendor kernel" || fail ufs.luns "$bad"
 	PLAN=UFS-02
 	bad=""
 	for blk in sda sdb sdc; do
@@ -893,7 +906,7 @@ m_pcie() {
 		ifc=$(ls $d/net 2> /dev/null | head -1)
 		if [ -n "$ifc" ]; then
 			x=$(ethtool -P $ifc 2> /dev/null | awk '{ print $NF }')
-			[ "$x" = "$(rd /sys/class/net/$ifc/address)" ] && [[ $x == 24:81:c7:* ]] && pass pcie.rc0-mac "$ifc $x (eFuse, Huawei OUI)" || fail pcie.rc0-mac "$ifc address $(rd /sys/class/net/$ifc/address), permanent '$x'"
+			[ "$x" = "$(rd /sys/class/net/$ifc/address)" ] && hw_mac_pref "$x" && pass pcie.rc0-mac "$ifc $x (eFuse, Huawei OUI)" || fail pcie.rc0-mac "$ifc address $(rd /sys/class/net/$ifc/address), permanent '$x'"
 			PLAN=ETH-02
 			if [ "$(rd /sys/class/net/$ifc/carrier)" = 1 ]; then
 				x="$(rd /sys/class/net/$ifc/speed) Mb/s $(rd /sys/class/net/$ifc/duplex)"
@@ -948,7 +961,7 @@ m_wifi() {
 	[ -e /sys/class/net/wlan0 ] || { fail wifi.netdev "no wlan0"; return; }
 	x=$(ethtool -P wlan0 2> /dev/null | awk '{ print $NF }')
 	PLAN=WLAN-13
-	[[ $x == 24:81:c7:* ]] && pass wifi.netdev "wlan0, permanent MAC $x (EEPROM), current $(rd /sys/class/net/wlan0/address)" || fail wifi.netdev "wlan0 permanent MAC '$x'"
+	hw_mac_pref "$x" && pass wifi.netdev "wlan0, permanent MAC $x (EEPROM), current $(rd /sys/class/net/wlan0/address)" || fail wifi.netdev "wlan0 permanent MAC '$x'"
 	x=$(rfkill -n -o TYPE,SOFT,HARD 2> /dev/null | awk '$1 == "wlan"')
 	[[ $x == *unblocked*unblocked* ]] && pass wifi.rfkill "wlan not blocked" || fail wifi.rfkill "rfkill: $x"
 	PLAN=WLAN-11
@@ -999,7 +1012,8 @@ m_bt() {
 	PLAN=BT-01
 	[ -d /sys/class/bluetooth/hci0 ] || { fail bt.hci0 "no hci0"; return; }
 	x=$(timeout 5 hciconfig hci0 2> /dev/null)
-	[[ $x == *"Bus: UART"* && $x == *"BD Address: 24:81:C7"* ]] && pass bt.hci0 "hci0 on UART, BD address $(echo "$x" | awk '/BD Address/ { print $3 }') (EEPROM)" || fail bt.hci0 "$(echo "$x" | head -2 | tr '\n' ' ')"
+	local bd; bd=$(echo "$x" | awk '/BD Address/ { print tolower($3) }')
+	[[ $x == *"Bus: UART"* ]] && hw_mac_pref "$bd" && pass bt.hci0 "hci0 on UART, BD address $bd (EEPROM)" || fail bt.hci0 "$(echo "$x" | head -2 | tr '\n' ' ')"
 	[ "$(echo "$x" | grep -oE 'errors:[0-9]+' | sort -u)" = "errors:0" ] && pass bt.hci-errors "RX/TX errors 0" || fail bt.hci-errors "$(echo "$x" | grep -oE '(RX|TX) bytes.*errors:[0-9]+' | tr '\n' ';')"
 	[ "$(systemctl is-active bluetooth 2> /dev/null)" = active ] && pass bt.service "bluetoothd active" || fail bt.service "bluetoothd $(systemctl is-active bluetooth)"
 	x=$(timeout 5 bluetoothctl show 2> /dev/null)
@@ -1294,19 +1308,35 @@ key_bit() { # $1 KEY bitmap (hex words, most significant first), $2 key code
 		v = index("0123456789abcdef", substr(s, length(s) - d, 1)) - 1; print int(v / 2 ^ (b % 4)) % 2 }'
 }
 m_input() {
-	local d x bad="" k c m found ev
+	local d x bad="" k c m found ev TP=""
+	for c in 0018:27C6:01E0 0018:04F3:3163; do
+		ls -d /sys/bus/hid/devices/$c.* > /dev/null 2>&1 && TP=$c
+	done
 	PLAN=INP-01
 	for x in "0018:14F3:1400 hid-generic 0b59b50698d56868688aab18b8896682 keyboard" "0018:27C6:01E0 hid-multitouch 2492dad29546e2dd0b0a160dede71bf9 touchpad"; do
 		set -- $x
 		d=$(ls -d /sys/bus/hid/devices/$1.* 2> /dev/null | head -1)
-		if [ -z "$d" ]; then fail inp.$4 "HID $1 missing"; continue; fi
+		if [ -z "$d" ]; then
+			# The other panel variant (Elan) has no vendor reference md5,
+			# so it only has to be present and bound to hid-multitouch.
+			if [ "$4" = touchpad ] && [ -n "$TP" ]; then
+				d=$(ls -d /sys/bus/hid/devices/$TP.* 2> /dev/null | head -1)
+				[ "$(drv_of $d)" = hid-multitouch ] &&
+					pass inp.touchpad "HID $TP on hid-multitouch (Elan panel, no vendor rdesc to compare)" ||
+					fail inp.touchpad "HID $TP driver $(drv_of $d)"
+			else
+				fail inp.$4 "HID $1 missing"
+			fi
+			continue
+		fi
 		[ "$(drv_of $d)" = $2 ] && [ "$(md5sum < $d/report_descriptor | cut -d' ' -f1)" = $3 ] &&
 			pass inp.$4 "HID $1 on $2, report descriptor identical to the vendor kernel" || fail inp.$4 "HID $1 driver $(drv_of $d), rdesc md5 $(md5sum < $d/report_descriptor | cut -c1-32)"
 	done
 	x=$(grep '^N: Name=' /proc/bus/input/devices)
-	for c in "14F3:1400 Keyboard" "14F3:1400 Wireless Radio Control" "27C6:01E0 Touchpad" "HISI 65xx PowerOn Key" "echub_lid" "hi6405 Headset Jack"; do
+	for c in "14F3:1400 Keyboard" "14F3:1400 Wireless Radio Control" "HISI 65xx PowerOn Key" "echub_lid" "hi6405 Headset Jack"; do
 		[[ $x == *"$c\""* ]] || bad="$bad '$c'"
 	done
+	case "$x" in *"27C6:01E0 Touchpad"*|*"04F3:3163 Touchpad"*) ;; *) bad="$bad 'touchpad (27C6:01E0 or 04F3:3163)'" ;; esac
 	[ -z "$bad" ] && pass inp.devices "keyboard, airplane key, touchpad, power key, lid, headset jack" || fail inp.devices "missing:$bad"
 	PLAN=INP-03
 	m=$(awk '/^N: Name="huawei-keyboard 14F3:1400/ { f = 1 } /^$/ { f = 0 } f && /^B: KEY=/ { sub(/^B: KEY=/, ""); print }' /proc/bus/input/devices)
@@ -1325,10 +1355,10 @@ m_input() {
 	else
 		skip inp.lid "no lid device or evtest"
 	fi
-	x=$(grep -E "huawei-keyboard|goodix-clickpad" /proc/interrupts | wc -l)
+	x=$(grep -E "huawei-keyboard|goodix-clickpad|elan-clickpad" /proc/interrupts | wc -l)
 	[ "$x" -ge 2 ] && pass inp.irqs "keyboard and touchpad interrupts registered" || fail inp.irqs "$x keyboard/touchpad interrupt lines"
 	if has libinput; then
-		x=$(timeout 10 libinput list-devices 2> /dev/null | awk '/^Device:.*27C6:01E0 Touchpad/ { f = 1 } f && /^Capabilities:/ { print; exit }')
+		x=$(timeout 10 libinput list-devices 2> /dev/null | awk '/^Device:.*(27C6:01E0|04F3:3163) Touchpad/ { f = 1 } f && /^Capabilities:/ { print; exit }')
 		[[ $x == *gesture* ]] && pass inp.libinput "libinput treats the touchpad as a touchpad ($x)" || fail inp.libinput "libinput touchpad capabilities: '$x'"
 	fi
 }
