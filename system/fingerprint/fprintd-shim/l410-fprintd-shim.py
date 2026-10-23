@@ -464,6 +464,11 @@ class Device:
     def _start_verify(self, finger):
         self.state.action = "verify"
         self.state.cancel.clear()
+        if finger == "any":
+            # Real fprintd reports the finger it actually selected; "any" is
+            # not a valid finger name and pam_fprintd flags it as unexpected.
+            enrolled = self.state.fingers(self.state.claimed_by)
+            finger = enrolled[0] if enrolled else "right-index-finger"
         self._emit("VerifyFingerSelected", "(s)", (finger,))
         self.state.worker = threading.Thread(
             target=self._verify_worker, args=(finger,), daemon=True)
@@ -522,7 +527,10 @@ class Device:
 def props_handler(device, conn, sender, path, iface, method, params, invocation):
     props = device.properties()
     if method == "Get":
-        name = params.unpack()[0]
+        # Get(interface_name, property_name): index 1 is the property, using
+        # index 0 made every Get fail with InvalidArgs and pam_fprintd could
+        # not read scan-type (-22), which broke the lock screen integration.
+        _iface_name, name = params.unpack()
         if name not in props:
             invocation.return_dbus_error(
                 "org.freedesktop.DBus.Error.InvalidArgs", name)
