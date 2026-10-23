@@ -860,6 +860,71 @@ fingerprint`）+ TA 查询确认两步；4.19 厂商的 `fingerprint_irq_handler
 `pm_wakeup_ws_event`、`sysfs_notify("irq")`，**并不直接通知 TEE**，所以这一步
 我们现在的桩驱动（`drivers/misc/huawei-fingerprint/`）行为是等价的。
 
+### 6.19 录入 100% 后 `end_enrol` 失败：SFS 的 fs agent 没接上（linux-l410 `107ff7b13`）
+
+6.18 上录入能一路到 `g_progress = 100`、`enroll complete!`，但最后一步失败：
+
+```
+14:25:53.091 fpc_tac_set_uuid, retval: 0
+14:25:53.092 fpc_tac_end_enrol
+14:25:53.094 fpc_tac_end_enrol fpc_tac_send_cmd failed with retval: -69
+14:25:53.095 fp_enroll_result_handle
+14:25:53.096 fp_enroll_result_handle failed -38
+```
+
+`-69` 不是驱动错误，而是 TA 写回操作参数的失败码：`libfingerprint`
+`fpc_tac_send_cmd()` 成功时返回 `operation.params[1].value.a`（TA 写的
+`0xffffffbb`），所以 SMC 层 `SMCCMD ... ret=0` 看起来一切正常。
+`/data/sec_storage_data/fp/sec_storage_data/fp/` 里也始终只有 `calibration/`，
+模板没落盘。
+
+对比 teecd（iTrustee 的 fs agent，SFS 的真正后端）的 I/O 找到了根因：
+
+| | UOS 4.19（正常） | 6.18（修前） |
+|---|---|---|
+| `rchar` | 1054292 | **33523** |
+| `wchar` | 327756 | **51** |
+| `write_bytes` | 335872 | **0** |
+
+也就是说 TA 的 SFS 请求根本没到 teecd。两个原因：
+
+1. **`REGISTER_AGENT` 被跳过**（`e53800f11`）。当初的理由是"Kirin 990 TEE
+   永不完成这条命令，teecd 会 hang"——那其实是同一轮
+   notify 页缺失（见 6.17）造成的。反汇编 4.19 厂商内核确认它**会**给每个新
+   agent 发这条命令：`tc_ns_register_agent`(`0xffffff8008e03370`) →
+   `register_agent_to_tee`(`0xffffff8008e01940`)，cmd id `6`、
+   `paramtypes=0x11`、`params[0]`=buffer 物理地址、`params[1].value.a`=size，
+   4.19 的 ioctl 结构里压根没有 `user_agent` 这个概念。notify 修好后这条命令
+   正常返回，teecd 也不再 hang。恢复后 teecd 注册了三个 agent：
+   `0x46536673`(FSfs) / `0x4d495343`(MISC) / `0x4c4f4144`(LOAD)。
+2. **agent 键值 nsid 不一致**。`init_nsid_vmid()` 给 `dev_file->nsid` 赋
+   `PROC_PID_INIT_INO`，但 Kirin 990 的 102 字节 wire 命令里**没有 nsid 字段**
+   （`proc_tc_ns_smc()` 强制发 0），所以 TEE 回来的 agent 请求带的是 `nsid=0`：
+
+   ```
+   init_agent_context: agent 0x46536673 nsid 0x0 vmid 0x0 not exist
+   ```
+
+   `find_event_control()` 按 `is_same_group(nsid,...)` 匹配，永远找不到 teecd
+   注册的那个 `(agent_id, PROC_PID_INIT_INO)`。修法是在该 TEEOS 上把
+   device file 的分组统一成 0（`init_client_group()`）。
+
+修完实测（冷启动，`end INIT_CMD_ID` 仍是 0.65s）：
+
+| | UOS 4.19 | 6.18 修后 |
+|---|---|---|
+| `agent ... not exist` | 0 | **0**（修前 7+） |
+| teecd `rchar` | 1054292 | **1075203** |
+| teecd `wchar` | 327756 | **327731** |
+| teecd `write_bytes` | 335872 | **335872** |
+
+即 SFS 的读写路径现在和 UOS 一致（boot 时 teecd 就会读/写
+`/data/sec_storage_data/fp/sec_storage_data/fp/calibration/*`）。
+
+**新增模块参数**：`agent_register_user`（默认 `Y`，与 4.19 厂商一致；
+`=0` 可复现旧的 end_enrol 失败）。
+
+
 ## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
