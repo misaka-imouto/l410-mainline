@@ -925,6 +925,54 @@ fingerprint`）+ TA 查询确认两步；4.19 厂商的 `fingerprint_irq_handler
 `=0` 可复现旧的 end_enrol 失败）。
 
 
+### 6.20 对接 fprintd：`net.reactivated.Fprint` 替身服务
+
+**为什么不是给 libfprint 写驱动**：本机 SPI1 归 TrustZone，用户态拿不到传感器图像；
+采图和比对都在 TA 里完成，只有华为 daemon（`com.huawei.Fingerprint`）能驱动它。
+libfprint 的驱动接口是私有 API、必须编进 libfprint；而 fprintd 的 D-Bus 接口是稳定
+公开的，KDE/GNOME 设置、`fprintd-*` 命令行、`pam_fprintd`（登录/sudo/锁屏）都用它。
+所以这里实现一个 **fprintd 替身**（own `net.reactivated.Fprint`），把请求转给华为 daemon。
+
+实现：`system/fingerprint/fprintd-shim/l410-fprintd-shim.py`（python3-gi），
+接口签名照抄 fprintd 1.94.5 的 `src/net.reactivated.Fprint.{Manager,Device}.xml`。
+
+| fprintd 调用 | 华为 daemon 调用 |
+|---|---|
+| `Claim(user)` | `StartSession` + `SearchDevice` |
+| `Release()` | `Close` |
+| `EnrollStart(finger)` | `Enroll(template_db_path, user)`，进度从 `fp_hal.log` 的 `Enrol took … (p: N)` 实时换算成 `enroll-stage-passed` |
+| `VerifyStart(finger)` | `Identify(user)`（在 TA 里阻塞到有手指） |
+| `ListEnrolledFingers` | `/var/lib/l410-fprint/enrolled.json`（daemon 没有“列出模板”的接口） |
+| `DeleteEnrolled*` | 只清本地记录（daemon 没有删除接口，模板仍在 TEE 的 SFS 里） |
+
+设备属性：`name` = 传感器名，`scan-type` = `press`，`num-enroll-stages` = 12
+（TA 每张接受图像 +8%，100/8≈12），`finger-present` 读
+`/sys/bus/platform/devices/fingerprint/irq`，`finger-needed` = 是否有动作在跑。
+
+部署（真实 fprintd 被 mask，D-Bus 激活指向替身）：
+
+```
+sudo install -m 755 l410-fprintd-shim.py /usr/local/sbin/l410-fprintd-shim
+sudo install -m 644 l410-fprintd-shim.service /etc/systemd/system/
+sudo install -m 644 net.reactivated.Fprint.service /usr/share/dbus-1/system-services/net.reactivated.Fprint.service
+sudo systemctl mask fprintd.service
+sudo systemctl enable --now l410-fprintd-shim.service
+```
+
+`/usr/share/dbus-1/system-services/net.reactivated.Fprint.service` 会被换成指向替身，
+D-Bus 激活（包括 `pam_fprintd` 的首次调用）都会拉起替身。
+
+验证（真 fprintd 客户端，无需改任何客户端代码）：
+
+```
+$ fprintd-list zhtsg
+found 1 devices
+Device at /net/reactivated/Fprint/Device/0
+Fingerprints for user zhtsg on Huawei L410 power-button sensor (iTrustee TA) (press):
+ - #0: right-index-finger
+```
+
+
 ## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：

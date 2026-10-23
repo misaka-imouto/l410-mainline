@@ -1,0 +1,19 @@
+[Unit]
+Description=Huawei L410 fingerprint reader for fprintd clients (D-Bus shim)
+Documentation=file:///usr/share/doc/l410/fingerprint.md
+# The real fprintd cannot drive this sensor (SPI1 belongs to the TEE), so this
+# service owns net.reactivated.Fprint and proxies to com.huawei.Fingerprint.
+Conflicts=fprintd.service
+After=dbus.service teecd.service hwfp_init.service
+Wants=hwfp_init.service
+RequiresMountsFor=/data
+
+[Service]
+Type=dbus
+BusName=net.reactivated.Fprint
+ExecStart=/usr/local/sbin/l410-fprintd-shim
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
