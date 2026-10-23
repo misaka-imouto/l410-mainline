@@ -52,7 +52,7 @@ case "$cmd" in
 	clear-pov)	$CTL ClearPovImage ;;
 	close)		$CTL Close ;;
 	reload)		$CTL Reload i "${1:?missing int}" ;;
-	enroll)		$CTL Enroll s "${1:?missing filePath}" s "${2:?missing accountInfo}" ;;
+	enroll)		$CTL Enroll ss "${1:?missing filePath}" "${2:?missing accountInfo}" ;;
 	identify)	$CTL Identify s "${1:?missing accountInfo}" ;;
 	*)		usage; exit 1 ;;
 esac
