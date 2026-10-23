@@ -62,6 +62,7 @@ install -D -m 644 "$D/systemd/hwfp_init.service" /etc/systemd/system/hwfp_init.s
 if command -v gcc >/dev/null 2>&1; then
     gcc -O2 -o /usr/local/sbin/fp_poweron "$D/bin/fp_poweron.c" 2>/dev/null || true
 fi
+install -D -m 755 "$D/bin/fingerprintctl" /usr/local/sbin/fingerprintctl
 systemctl daemon-reload || true
 
 # 5. Enable and start teecd service

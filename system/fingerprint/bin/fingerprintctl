@@ -1,0 +1,58 @@
+#!/bin/sh
+# fingerprintctl - talk to the Huawei fingerprint daemon over D-Bus.
+#
+# The daemon (fingerprint_daemon) owns com.huawei.Fingerprint and exposes an
+# object at /com/huawei/Fingerprint.  Signatures, reverse-engineered from the
+# vendor binary (fingerprint_dbus.c error strings):
+#
+#   StartSession()                       -> i  (0 ok)
+#   GetStatus()                          -> i
+#   DeviceProperties()                   -> ib (present, supported)
+#   SearchDevice()                       -> b
+#   ClearPovImage()                      -> i
+#   Close()                              -> i
+#   Reload(int)                          -> i   (template db / group)
+#   Enroll(string filePath, string accountInfo) -> i
+#   Identify(string accountInfo)         -> i   (blocks until a finger is seen)
+#   IdentifyWithMultipleUser(string)     -> i
+#
+# Enroll blocks while the daemon waits for finger touches and drives the
+# EnrollStatus signal; run it in one terminal and watch the daemon log.
+set -e
+
+BUS=com.huawei.Fingerprint
+OBJ=/com/huawei/Fingerprint
+IFACE=com.huawei.Fingerprint
+CTL="busctl --system call $BUS $OBJ $IFACE"
+
+usage() {
+	cat <<'EOF'
+usage: fingerprintctl <command> [args]
+
+  session                  StartSession
+  status                   GetStatus
+  device                   DeviceProperties
+  search                   SearchDevice
+  clear-pov                ClearPovImage
+  reload <int>             Reload
+  close                    Close
+  enroll <file> <account>  Enroll (blocks; touch the sensor)
+  identify <account>       Identify (blocks; touch the sensor)
+EOF
+}
+
+cmd=$1
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+	session)	$CTL StartSession ;;
+	status)		$CTL GetStatus ;;
+	device)		$CTL DeviceProperties ;;
+	search)		$CTL SearchDevice ;;
+	clear-pov)	$CTL ClearPovImage ;;
+	close)		$CTL Close ;;
+	reload)		$CTL Reload i "${1:?missing int}" ;;
+	enroll)		$CTL Enroll s "${1:?missing filePath}" s "${2:?missing accountInfo}" ;;
+	identify)	$CTL Identify s "${1:?missing accountInfo}" ;;
+	*)		usage; exit 1 ;;
+esac
