@@ -63,6 +63,8 @@ if command -v gcc >/dev/null 2>&1; then
     gcc -O2 -o /usr/local/sbin/fp_poweron "$D/bin/fp_poweron.c" 2>/dev/null || true
 fi
 install -D -m 755 "$D/bin/fingerprintctl" /usr/local/sbin/fingerprintctl
+install -D -m 644 "$D/logind/50-l410-fingerprint.conf" /etc/systemd/logind.conf.d/50-l410-fingerprint.conf
+systemctl restart systemd-logind 2>/dev/null || true
 systemctl daemon-reload || true
 
 # 5. Enable and start teecd service
