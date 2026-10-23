@@ -29,6 +29,7 @@ import json
 import os
 import pwd
 import re
+import subprocess
 import threading
 import time
 
@@ -191,6 +192,33 @@ def hw_int(conn, method, args=None, timeout=60000):
     return res.unpack()[0]
 
 
+def unlock_locked_sessions(user):
+    """Unlock the user's locked graphical sessions after a fingerprint match.
+
+    KDE 6.3's lock screen runs the fingerprint check in a non-interactive PAM
+    transaction (kde-fingerprint), but that stack also contains pam_kwallet5,
+    which blocks without a password, so the greeter never sees the success and
+    the user has to press the arrow.  Removing pam_kwallet5 makes the greeter
+    skip the fingerprint authenticator altogether, so instead the match
+    itself unlocks the session - which is the behaviour of the UOS lock screen
+    (touch and you are back on the desktop).
+    """
+    try:
+        out = subprocess.run(["loginctl", "show-user", user, "-p", "Sessions",
+                              "--value"], capture_output=True, text=True,
+                             timeout=5).stdout.split()
+    except (OSError, subprocess.SubprocessError) as e:
+        log("cannot list sessions for %s: %s" % (user, e))
+        return
+    for sid in out:
+        try:
+            subprocess.run(["loginctl", "unlock-session", sid],
+                           capture_output=True, timeout=5)
+            log("unlock-session %s (%s)" % (sid, user))
+        except (OSError, subprocess.SubprocessError) as e:
+            log("unlock-session %s failed: %s" % (sid, e))
+
+
 def finger_present():
     try:
         with open(IRQ_NODE) as f:
@@ -304,6 +332,14 @@ class Device:
                 if self.state.action:
                     raise FprintError("AlreadyInUse", "Device already in use")
                 log("taking the device over from %s" % self.state.claimed_by)
+            # A new Claim means a new PAM transaction: drop any action left
+            # over from a greeter that died without VerifyStop, otherwise the
+            # following VerifyStart is rejected with AlreadyInUse.
+            if self.state.action is not None:
+                log("Claim: dropping stale action %r" % self.state.action)
+                self.state.cancel.set()
+                self.state.action = None
+                self.state.worker = None
             self.state.claimed_by = user
             # Reset the vendor session first: a previous PAM transaction can
             # leave the daemon mid-identify (no VerifyStop ever arrives when
@@ -504,6 +540,7 @@ class Device:
         log("identify result=%d (%s)" % (result, finger))
         if result == 0:
             self._emit("VerifyStatus", "(sb)", ("verify-match", True))
+            unlock_locked_sessions(user)
         else:
             self._emit("VerifyStatus", "(sb)", ("verify-no-match", True))
         # Only a *successful* verify keeps state.action set (the client always

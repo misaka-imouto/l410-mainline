@@ -1011,6 +1011,55 @@ daemon 侧的日志可以确认真录成功了：`fp_enroll_e100_handle` → `fp
   （需先停 daemon 让出 TA 会话），要么逆向 TA 的删除命令。
 
 
+#### 6.20.2 实测：KDE 设置可用，锁屏受 `pam_kwallet5` 阻塞
+
+**KDE 设置（Users KCM）验证通过**：能列出设备、`Claim` + `EnrollStart`，整轮录入
+（8~20 次轻触）走完 `fp_enroll_e100_handle → fpc_tac_end_enrol →
+fp_enroll_result_handle completed`，模板库 70848 → 86208 字节。
+
+**锁屏（kscreenlocker 6.3.5）的实测结论**（都是实机日志，不是推测）：
+
+1. KDE 6.3 的锁屏是「密码框 + 指纹提示并存」，没有 UOS 那种指纹/密码 tab。
+2. 它把指纹放在 **non-interactive PAM 事务** `kde-fingerprint` 里跑（greeter 二进制
+   里有 `PamAuthenticators` / `NoninteractiveAuthenticatorType = None|Fingerprint|Smartcard`）。
+3. `/usr/lib/pam.d/kde-fingerprint` 里除了 `pam_fprintd` 还有 `pam_kwallet5`。
+   指纹成功时没有密码，`pam_kwallet5` 于是去要钱包密码：
+   ```
+   pam_fprintd(kde-fingerprint:auth): Verify result: verify-match (done: 1)
+   pam_kwallet5(kde-fingerprint:auth): Couldn't get password (it is empty)
+   ……然后事务卡住 59 秒 / 弹框，greeter 收不到成功……
+   ```
+   这就是"摸完还得点箭头"的直接原因。
+4. **把 `pam_kwallet5` 从那个栈里删掉会让 greeter 干脆不启动指纹鉴权**
+   （日志里只剩 smartcard 的 `pam_sss`，替身一次调用都收不到），所以不能删。
+
+因此替身改成：**识别匹配成功后自己 `loginctl unlock-session <id>`**（对 C 层用户
+的所有会话），效果就是"摸一下直接回桌面"，与 KDE 的事务是否卡住无关。相关代码在
+`fprintd-shim/l410-fprintd-shim.py` 的 `unlock_locked_sessions()`。
+
+**PAM 最终布局**（`system/fingerprint/install.sh` 已固化）：
+
+| 文件 | 内容 | 作用 |
+|---|---|---|
+| `/etc/pam.d/common-auth` | **无** `pam_fprintd` | 密码事务保持纯密码：否则锁屏的密码事务会 10s 超时判失败并触发钱包 |
+| `/usr/lib/pam.d/kde-fingerprint` | plasma 自带 `pam_fprintd` | 锁屏发起指纹识别的入口（不要删 `pam_kwallet5`，见上） |
+| `/etc/pam.d/sudo` | `auth sufficient pam_fprintd.so max-tries=1 timeout=10` | 本机终端的 sudo 可用指纹，失败/超时自动回退密码 |
+
+**踩坑备忘（替身侧，全部已修）**：
+
+- `Properties.Get` 参数取错（把接口名当属性名）→ pam_fprintd 读不到 `scan-type`（-22）
+- `VerifyFingerSelected` 必须在 `VerifyStart` **返回后**再发，否则 pam_fprintd 判
+  "Unexpected ... signal" 丢弃
+- 锁屏会并发发起两个事务（`Claim` ×2、`VerifyStart` ×2）：`Claim` 必须幂等，
+  `VerifyStart` 在已有活着的 worker 时 join，而不是报 `AlreadyInUse`
+- greeter 死掉时不会发 `VerifyStop`：残留的 `action="verify"` 会吞掉下一次请求，
+  所以 `Claim` 要清残留 action，识别失败也要立刻复位
+- 每次 `Claim` 先 `Close()` 重置厂商会话，否则 daemon 卡在上一次的 identify 里，
+  下一次 `VerifyStart` 直接 `Device already in use`
+- `pam_fprintd` 会跳过远程会话（`sd_session_is_remote`），所以 PAM 测试必须在
+  本地控制台/锁屏做，SSH 里测不出来（会直接走密码）
+
+
 ## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：

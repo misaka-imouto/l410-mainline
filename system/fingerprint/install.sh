@@ -79,6 +79,35 @@ if [ -f "/usr/lib/systemd/system/hwfp_init.service" ] || [ -f "/etc/systemd/syst
     enable_now hwfp_init.service || true
 fi
 
+
+# 6b. fprintd bridge: the sensor is owned by the TEE (SPI1 is TrustZone-only,
+#     capture and matching happen inside the TA), so libfprint cannot drive it.
+#     Everything that consumes fingerprints (KDE/GNOME settings, fprintd-*,
+#     pam_fprintd for login/sudo/lock screen) speaks fprintd's stable D-Bus
+#     API, so install a shim that owns net.reactivated.Fprint and proxies to
+#     com.huawei.Fingerprint.
+say "Installing the fprintd D-Bus shim (net.reactivated.Fprint)..."
+install -D -m 755 "$D/fprintd-shim/l410-fprintd-shim.py" /usr/local/sbin/l410-fprintd-shim
+install -D -m 644 "$D/fprintd-shim/l410-fprintd-shim.service" /etc/systemd/system/l410-fprintd-shim.service
+# D-Bus activation must start the shim, not the real fprintd.
+install -D -m 644 "$D/fprintd-shim/net.reactivated.Fprint.service" \
+    /usr/share/dbus-1/system-services/net.reactivated.Fprint.service
+systemctl mask fprintd.service >/dev/null 2>&1 || true
+systemctl daemon-reload || true
+enable_now l410-fprintd-shim.service || true
+
+# 6c. PAM: fingerprint for the local console only.
+#     * common-auth stays password-only: pam_fprintd there makes the KDE lock
+#       screen's password transaction fail after a 10s timeout and then trips
+#       pam_kwallet5 (which then waits for a wallet password).
+#     * the lock screen uses its own /usr/lib/pam.d/kde-fingerprint stack,
+#       which plasma ships with pam_fprintd already.
+#     * sudo gets a sufficient pam_fprintd line so a local terminal can use
+#       the finger; a failure or timeout falls through to the password.
+if [ -f /etc/pam.d/sudo ] && ! grep -q pam_fprintd /etc/pam.d/sudo; then
+    sed -i "/@include common-auth/i auth\tsufficient\tpam_fprintd.so max-tries=1 timeout=10" /etc/pam.d/sudo
+fi
+
 # 7. Enable Deepin Authentication service if installed
 if [ -f "/usr/lib/systemd/system/deepin-authenticate.service" ]; then
     say "Enabling deepin-authenticate service..."
