@@ -381,7 +381,9 @@ class Device:
         if method == "VerifyStart":
             (finger,) = params.unpack()
             self._require_claim(invocation)
-            if self.state.action == "verify":
+            worker_alive = (self.state.worker is not None
+                            and self.state.worker.is_alive())
+            if self.state.action == "verify" and worker_alive:
                 # The KDE lock screen runs two PAM transactions (kde and
                 # kde-fingerprint) and both call VerifyStart; a second
                 # AlreadyInUse makes the visible one fail.  Both can simply
@@ -458,7 +460,9 @@ class Device:
             log("enroll failed (result=%d)" % result)
             self._emit("EnrollStatus", "(sb)", ("enroll-failed", True))
         # Keep state.action until EnrollStop/Release: fprintd clients call
-        # *Stop right after the final status and expect it to succeed.
+        # *Stop right after the final status and expect it to succeed.  The
+        # worker reference is cleared so the next request sees it is gone.
+        self.state.worker = None
 
     # ---- verify --------------------------------------------------------
     def _start_verify(self, finger):
@@ -493,7 +497,9 @@ class Device:
             self._emit("VerifyStatus", "(sb)", ("verify-match", True))
         else:
             self._emit("VerifyStatus", "(sb)", ("verify-no-match", True))
-        # state.action stays set until VerifyStop, see _enroll_worker.
+        # state.action stays set until VerifyStop, see _enroll_worker; clear
+        # the worker so a later VerifyStart does not "join" a dead one.
+        self.state.worker = None
 
     def _stop_action(self):
         self.state.cancel.set()
