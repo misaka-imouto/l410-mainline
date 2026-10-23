@@ -767,6 +767,99 @@ smc_cmd/operation（尤其是 `params[0].value` 和 `started`），和 6.18 对�
 daemon 因此无限等"手指抬起"。这是传感器/TA 层的手指检测，不是 SMC 性能：
 下一个排查点是采图质量/IRQ 是否被锁存，以及正常录入时 5/6 的切换节奏。
 
+### 6.17 `cmd 0` 慢的真正原因：没注册 TEE notify 页（linux-l410 `d047131f5`）
+
+6.16 留下的问题是「同样的 TEE 命令，从内核线程发就快、从 daemon 上下文发就慢」。
+用 `smc_debug=1`（把 `smc #0` 内部耗时和循环外耗时分开计时）量出来的结果推翻了
+"调用上下文"假设——**时间全在 TEE 里**：
+
+```
+SMCRETRY n=106 cmd=0x0 ret=0xb2000009 exit=0x1 ta=0x0 tgt=0xffffffb26e526000 \
+         cpu=6 in_smc_us=3996 round_us=4000
+```
+
+每一轮 `in_smc_us ≈ 3996µs`、`round_us ≈ 4000µs`：NS 侧只花了 4µs，TEE 跑满
+一个 4ms tick 就 `SMC_EXIT_PREEMPTED` 交还一次。`smc_svc_thread` 的 `cmd 0x1b`
+是 `in_smc_us=23 round_us=23`——它不是"上下文更快"，而是**它本来就短**，4ms
+内就跑完了。
+
+所以 `cmd 0` 慢 = TA 在安全世界里空转。对比 UOS 4.19 的同一命令：
+
+| 指标 | UOS 4.19 | 6.18（notify 关闭） |
+|---|---|---|
+| `end INIT_CMD_ID` 耗时 | 0.674s | 210s（多轮 5~14s 拼起来） |
+| daemon `stime` 累计（=TEE CPU） | 0.68s（68 jiffies @HZ=100） | ~23s（5740 jiffies @HZ=250） |
+| `Load TA took` | — | 1.09s（且每次重来） |
+
+**根因是 6.18 侧把整个 `tz_spi_init()` 跳过了**（`06fbaba82`，当初为了避免
+openEuler 版注册命令 30s 超时）。`tz_spi_init()` 做两件事：把一页 notify 内存
+（`GLOBAL_CMD_ID_REGISTER_NOTIFY_MEMORY`）注册给 TEE，并申请 TEE→NS 的
+安全 SPI 中断（本机 GICv3 **376**，`/proc/interrupts` 里名为 `tc_ns_client`）。
+少了它，TEE 就没有任何办法告诉 NS "正在跑的 TA 需要你注意"，长命令只能退化成
+"每个 tick 空转一轮"。
+
+修正（`d047131f5`）：Kirin 990 也执行 `tz_spi_init()`（与 4.19 厂商一致），
+`TC_NS_CLIENT_IOCTL_REGISTER_NOTIFY_MEMORY` 现在返回成功。结果：
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| `cmd 0` 单次 | retries 111~3574，0.29~14s | retries 3~109，10~415ms |
+| `fpc_tac_open → end INIT_CMD_ID` | 210s | **0.62s** |
+| `Load TA took` | 1096062µs | 63.6ms |
+| `tc_ns_client` 中断 | 未注册 | 已注册，init 期间触发 8~9 次 |
+
+修复后每次 `cmd 0` 依然是 4ms 一轮，但总轮数=350 左右（约 0.62s），和 UOS 的
+0.68s 完全对得上，说明 ABI/数据面已经正确，之前缺的只是 notify 通道。
+
+**新增模块参数**（都在 `tzdriver.ko` 上，`/sys/module/tzdriver/parameters/`）：
+
+| 参数 | 默认 | 作用 |
+|---|---|---|
+| `kirin990_notify` | `Y` | 是否在 Kirin 990 上注册 notify 页 + `tc_ns_client` 中断。`=0` 可复现旧的 210s |
+| `kirin990_tlogger` | `N` | 是否注册 TEEOS log 内存（`GLOBAL_CMD_ID_REGISTER_LOG_MEM`），用于抓 TEE/TA 日志 |
+| `smc_debug` | `0` | `1`=打印每轮 `in_smc_us/round_us`（前 24 轮）；`2`=再额外 trace 每条 TA/global 命令（`SMCCMD`） |
+
+`smc_debug=2` 的 `SMCCMD pid=... cmd=0x.. type=.. ret=..` 是排查 HAL 状态机的
+主要工具，`type=0` 是 TA 命令、`type=1` 是 global 命令。
+
+### 6.18 录入时 5/6 的真实节奏（`check_finger_lost`）
+
+`fpc_tac_check_finger_lost` = TA cmd **0xa**，`fpc_tac_send_get_uint32_cmd()` 的
+返回值取的是 `params[0].value.b`（`value.a` 通过指针返回）。把 6.18 上的完整
+日志按时间排开，正常节奏是这样的（10:39 那次录入）：
+
+```
+capture_image_handle                       ← 采图完成
+wait_finger_up_common
+  fpc_tac_check_finger_lost → 5            ← 手指仍在（30ms 返回）
+  fpc_tac_check_finger_lost → 5
+  fpc_tac_check_finger_lost → 5
+  fpc_tac_check_finger_lost → 6            ← 手指抬起（这条会阻塞等待）
+wait_finger_up FPC_LIB_FINGER_LOST
+```
+
+也就是说 **5=手指还在、6=手指已离开**，而 `wait_finger_up_common`
+（libfingerprint `0x180f0`）是这么循环的：`wait_finger_up → wait_finger_down →
+check_finger_lost`，只有拿到 6 才退出，否则回去再等下一次按下。所以"一直返回 5
++ daemon 无限等"的观感有两种可能，需要实测区分：
+
+1. 手指抬起后 TA 仍报 5（真缺陷，传感器 latch/采图没清状态）；
+2. 5 是"手指还在"的正常回答，daemon 其实在等下一次按下——历史日志里
+   `wait_finger_down took 5418/62855/98548/118313 ms` 对应的是两次触摸之间的
+   间隔，本来就该是几十秒。
+
+可对照的数据点：抬起后第一次 `check_finger_lost` 若已经离手，是**30~55ms** 就
+返回 6（10:39:50、10:42:04、11:53:55 三次），说明 TA 的离手检测本身可以很快。
+所以下一次实测要记录的是「抬起时刻 → 返回 6 的时刻」的差，以及 `smc_debug=2`
+下 0xa 前后还有哪些 TA 命令。
+
+另外，`fpc_ree_device_wait_irq` 之后紧跟 `fpc_tac_check_irq_status`，说明
+"等手指按下"是 NS 侧等 GPIO IRQ（`/proc/interrupts` 的 `fa8b1000.gpio 2 Edge
+fingerprint`）+ TA 查询确认两步；4.19 厂商的 `fingerprint_irq_handler`
+（反汇编 `0xffffff8008e4dac0`）只做 `gpio_to_desc/gpiod_get_raw_value`、
+`pm_wakeup_ws_event`、`sysfs_notify("irq")`，**并不直接通知 TEE**，所以这一步
+我们现在的桩驱动（`drivers/misc/huawei-fingerprint/`）行为是等价的。
+
 ## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
