@@ -1060,6 +1060,31 @@ fp_enroll_result_handle completed`，模板库 70848 → 86208 字节。
   本地控制台/锁屏做，SSH 里测不出来（会直接走密码）
 
 
+#### 6.20.3 删指纹的工具（已写好、待实机验证）
+
+`system/fingerprint/bin/l410-fp-del.c`（已交叉编译并装到远程
+`/usr/local/sbin/l410-fp-del`）：用 `dlopen("libhwFingerprint.so")` 调厂商 HAL 的
+`CommonInitFingerprint` / `CommonDriverGetFpNum` / `CommonDriverGetFpList` /
+`CommonDriverDeleteFp`，也就是 UOS 控制中心通过 Android HAL 走的那条删除路径
+（最终发给 TA 的是 `fpc_tac_send_delete_fingerprint_set`）。入口函数的原型是从符号
+和反汇编推的，不是华为头文件，所以：
+
+- `--list` 是只读的，可以先跑它确认 ABI 猜对了
+- `--delete <id>` 会真的发 TA 删除命令，**参数猜错可能把整个模板库清空**，必须
+  在机主在场时做，并先备份 `/data/sec_storage_data`
+- 跑之前要 `systemctl stop hwfp_init` 让出 TA 会话（teecd 保持运行，TA 需要它的
+  fs agent 做 SFS）
+
+```sh
+sudo systemctl stop hwfp_init
+sudo LD_LIBRARY_PATH=/opt/uos-fp/lib /usr/local/sbin/l410-fp-del --account zhtsg --list
+sudo LD_LIBRARY_PATH=/opt/uos-fp/lib /usr/local/sbin/l410-fp-del --account zhtsg --delete 0
+sudo systemctl start hwfp_init
+# 验证（不需要触摸）：模板条数应减 1
+sudo grep -a primary_indices_count /var/log/fp_kirin/fp_hal.log | tail -1
+```
+
+
 ## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
