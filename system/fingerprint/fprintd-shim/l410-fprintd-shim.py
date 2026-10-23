@@ -130,6 +130,7 @@ class State:
     def __init__(self):
         self.lock = threading.Lock()
         self.claimed_by = None      # username
+        self.claim_owner = None     # D-Bus sender that claimed it
         self.action = None          # None | "enroll" | "verify"
         self.cancel = threading.Event()
         self.worker = None
@@ -275,10 +276,13 @@ class Device:
         try:
             return self._handle(method, params, invocation)
         except FprintError as e:
+            log("error %s: %s" % (e.dbus_name, e.message))
             invocation.return_dbus_error(e.dbus_name, e.message)
         except GLib.Error as e:
+            log("error (dbus): %s" % e.message)
             invocation.return_dbus_error(ERROR_PREFIX + "Internal", str(e))
         except Exception as e:                      # noqa: BLE001
+            log("error (internal): %r" % e)
             invocation.return_dbus_error(ERROR_PREFIX + "Internal", repr(e))
 
     def _handle(self, method, params, invocation):
@@ -291,16 +295,27 @@ class Device:
             user = self._resolve_user(invocation, username)
             if not user:
                 raise FprintError("PermissionDenied", "cannot resolve caller")
-            if self.state.claimed_by:
-                raise FprintError("AlreadyInUse", "Device already claimed")
+            # Claim must be idempotent: pam_fprintd (and the KDE lock screen)
+            # claim the device again for every attempt, and a greeter that
+            # dies without Release() would otherwise wedge the device with
+            # AlreadyInUse forever, which looks exactly like "fingerprint does
+            # nothing" in the lock screen.
+            if self.state.claimed_by and self.state.claimed_by != user:
+                if self.state.action:
+                    raise FprintError("AlreadyInUse", "Device already in use")
+                log("taking the device over from %s" % self.state.claimed_by)
             self.state.claimed_by = user
-            # Wake the vendor stack: session + device check.
+            # Wake the vendor stack: session + device check.  An already open
+            # session is fine (StartSession then returns non-zero).
             try:
                 hw_int(self.conn, "StartSession", None, 60000)
+            except GLib.Error as e:
+                log("StartSession: %s (continuing)" % e.message)
+            try:
                 hw_call(self.conn, "SearchDevice", None, "(b)", 30000)
             except GLib.Error as e:
-                self.state.claimed_by = None
-                raise FprintError("Internal", "huawei daemon: %s" % e.message)
+                log("SearchDevice: %s (continuing)" % e.message)
+            self.state.claim_owner = invocation.get_sender()
             log("claimed by %s" % user)
             invocation.return_value(None)
             return
@@ -316,6 +331,7 @@ class Device:
                 pass
             log("released (%s)" % self.state.claimed_by)
             self.state.claimed_by = None
+            self.state.claim_owner = None
             invocation.return_value(None)
             return
 
@@ -365,6 +381,14 @@ class Device:
         if method == "VerifyStart":
             (finger,) = params.unpack()
             self._require_claim(invocation)
+            if self.state.action == "verify":
+                # The KDE lock screen runs two PAM transactions (kde and
+                # kde-fingerprint) and both call VerifyStart; a second
+                # AlreadyInUse makes the visible one fail.  Both can simply
+                # watch the same VerifyStatus signals instead.
+                log("VerifyStart(%s): already verifying, joining" % finger)
+                invocation.return_value(None)
+                return
             self._require_idle(invocation)
             if not self.state.fingers(self.state.claimed_by):
                 raise FprintError("NoEnrolledPrints", "nothing enrolled")
@@ -374,7 +398,10 @@ class Device:
 
         if method == "VerifyStop":
             if self.state.action != "verify":
-                raise FprintError("NoActionInProgress", "no verify in progress")
+                # Harmless: several clients stop the same verification.
+                log("VerifyStop: nothing running")
+                invocation.return_value(None)
+                return
             self._stop_action()
             invocation.return_value(None)
             return
@@ -517,6 +544,25 @@ def on_name_lost(conn, name):
     os._exit(1)
 
 
+def watch_owner_changes(conn, device):
+    """Drop a stale claim when the client that made it disconnects."""
+
+    def on_signal(_conn, _sender, path, iface, signal, params):
+        if path != "org/freedesktop/DBus":
+            return
+        name, _old, new = params.unpack()
+        if new == "" and name == device.state.claim_owner:
+            log("claimer %s vanished, releasing" % name)
+            device.state.claim_owner = None
+            device.state.claimed_by = None
+            if device.state.action:
+                device._stop_action()
+
+    conn.signal_subscribe(
+        "org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged",
+        "/org/freedesktop/DBus", None, Gio.DBusSignalFlags.NONE, on_signal)
+
+
 def main():
     conn = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
 
@@ -551,6 +597,7 @@ def main():
                          props_handler(device, c, s, p, i, m, pr, inv),
                          None, None)
 
+    watch_owner_changes(conn, device)
     Gio.bus_own_name_on_connection(
         conn, BUS_NAME, Gio.BusNameOwnerFlags.NONE, None, on_name_lost)
     log("l410-fprintd-shim up on %s (%s)" % (BUS_NAME, DEVICE_PATH))
