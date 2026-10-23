@@ -305,8 +305,14 @@ class Device:
                     raise FprintError("AlreadyInUse", "Device already in use")
                 log("taking the device over from %s" % self.state.claimed_by)
             self.state.claimed_by = user
-            # Wake the vendor stack: session + device check.  An already open
-            # session is fine (StartSession then returns non-zero).
+            # Reset the vendor session first: a previous PAM transaction can
+            # leave the daemon mid-identify (no VerifyStop ever arrives when
+            # the greeter dies), and then every VerifyStart fails with
+            # "Device already in use".  Close() cancels that worker thread.
+            try:
+                hw_int(self.conn, "Close", None, 8000)
+            except GLib.Error as e:
+                log("Close (session reset): %s" % e.message)
             try:
                 hw_int(self.conn, "StartSession", None, 60000)
             except GLib.Error as e:
@@ -500,9 +506,13 @@ class Device:
             self._emit("VerifyStatus", "(sb)", ("verify-match", True))
         else:
             self._emit("VerifyStatus", "(sb)", ("verify-no-match", True))
-        # state.action stays set until VerifyStop, see _enroll_worker; clear
-        # the worker so a later VerifyStart does not "join" a dead one.
+        # Only a *successful* verify keeps state.action set (the client always
+        # calls VerifyStop after a match).  On failure nothing will call
+        # VerifyStop, so release the device here or the next attempt is
+        # rejected with AlreadyInUse.
         self.state.worker = None
+        if result != 0:
+            self.state.action = None
 
     def _stop_action(self):
         self.state.cancel.set()
