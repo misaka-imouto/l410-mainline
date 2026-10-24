@@ -43,11 +43,14 @@
   可能让键盘整个启动周期都不出现。
 - 指纹：**端到端可用**。TEE 网关、TA、SFS 模板存储、录入、识别、KDE 设置的录入/识别、
   `fprintd` 接口（替身服务 `net.reactivated.Fprint`）和 `sudo` 指纹都已实机验证。
-  细节见 [hardware/fingerprint.md](hardware/fingerprint.md) §6.17~6.20。
-  还剩三件小事：① 已录入的旧模板删不掉（厂商 D-Bus 没有删除/列举接口，删除只在
+  细节见 [hardware/fingerprint.md](hardware/fingerprint.md) §6.17~6.23。
+  HAL 的等待/中断语义已于 2026-10-24 按 UOS 对齐（`irq` 属性=线的实时电平，
+  `0157cfc6f`）：空闲时 HAL 正常阻塞在 `poll()`，不再每 20 ms 重新武装一次。
+  待办：① 一次**真实触摸**的回归（§6.23 末尾有命令，必须机主在旁边）；
+  ② 已录入的旧模板删不掉（厂商 D-Bus 没有删除/列举接口，删除只在
   Android HAL 的 `remove()` → TA `fpc_tac_send_delete_fingerprint_set`，工具
-  `l410-fp-del` 已写好但未实机运行）；② KDE 6.3 锁屏没有 UOS 那种指纹/密码 tab，
-  指纹成功由替身 `loginctl unlock-session` 兜底解锁；③ SDDM 登录界面仍是纯密码。
+  `l410-fp-del` 已写好但未实机运行）；③ KDE 6.3 锁屏没有 UOS 那种指纹/密码 tab，
+  指纹成功由替身 `loginctl unlock-session` 兜底解锁；④ SDDM 登录界面仍是纯密码。
   另外开机后第一次 TA open session 可能以 `0xFFFF6004` 失败一次，daemon 自己重试，
   指纹可用时间因此晚约 14 秒（见下）。
 - 音频：耳机插拔和线控需要人工验证；每次时钟启停后功放会锁存一个时钟错误位（不影响出声）；

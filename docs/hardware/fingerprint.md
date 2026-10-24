@@ -5,11 +5,13 @@
 
 在 Linux 6.18 主线内核中，我们通过引入 **iTrustee tzdriver** 安全客户端网关驱动与 **huawei-fingerprint** 平台驱动，完整打通了从内核设备节点、TrustZone 通信通道到用户态守护进程与桌面 PAM 生物认证的完整技术栈。
 
-> **当前状态（2026-10-23）**：整条栈已实机跑通——录入、识别、模板落盘、KDE 设置、
-> `fprintd` D-Bus 替身、`sudo` 指纹、KDE 锁屏解锁都验证过。未完成的只有：
-> 删除已录入模板（`l410-fp-del` 待实机确认 ABI）、SDDM 登录界面指纹。
+> **当前状态（2026-10-24）**：整条栈已实机跑通——录入、识别、模板落盘、KDE 设置、
+> `fprintd` D-Bus 替身、`sudo` 指纹、KDE 锁屏解锁都验证过。待办：
+> ① 删除已录入模板（`l410-fp-del` 待实机确认 ABI）；② SDDM 登录界面指纹；
+> ③ **一次真实触摸的回归**（等待/中断语义已按 UOS 对齐，见 §6.23，但没有手指在机器旁
+> 时只能验证到“HAL 正常阻塞在 poll()”）。
 > 下文 §5~§6.19 是调试过程记录，里面的“阻塞/未做”只代表当时；
-> 当前结论看 §6.20 和 [known-issues.md](../known-issues.md)。
+> 当前结论看 §6.20、§6.23 和 [known-issues.md](../known-issues.md)。
 
 ---
 
@@ -1157,26 +1159,28 @@ TA 的 `fp_init_sensor` 用 `FP_IOC_CMD_GET_DEVICE_INFO` 拿到的引脚号去�
 `func_init_sensor: module_info: 23100501TC38A1109051209P...`（真实模组 ID），
 `finger_detect` 恢复 0，IRQ 开始计数。
 
-### 6.22 中断握手：enable 要返回 1、irq 属性要锁存、probe 后先关中断
+### 6.22 中断握手：enable 要返回 1、`irq` 属性语义要对、probe 后先关中断
 
-对照 strace 出来的 HAL 行为（`fpc_ree_device_wait_irq()` 是
-`ioctl(0x6601 ENABLE_IRQ)` → `ppoll(200ms)` → `ioctl(0x6602 DISABLE_IRQ)` →
-TA `check_irq_status`）逐项对齐厂商驱动：
+> **2026-10-24 更正**：本节原来的“`irq` 属性要锁存”是错的，正是它让 HAL 自激。
+> 正确语义是**实时电平**，见 §6.23。下面保留当时的推理过程，表格已按最终结论修正。
+
+对照 strace 出来的 HAL 行为（`fpc_ree_device_wait_irq()` 依次做
+`read sysfs irq` → 读到 0 才 `poll(POLLPRI)`，一圈由 HAL 用
+`ENABLE_IRQ(0x6601)` / `DISABLE_IRQ(0x6602)` 包起来）逐项对齐厂商驱动：
 
 | 项 | 厂商驱动 | 我们（修前） | 现在 |
 |---|---|---|---|
 | `ENABLE_IRQ` 返回值 | **1**（`mov w0,#1` 后 ret） | 0 → HAL 认为没武装，20ms 重来 | 1 |
-| `irq` sysfs 属性 | 读后清（传感器只脉冲） | 实时电平，几乎总是 0 | 锁存 + 读后清，OR 实时电平 |
-| probe 后的中断状态 | `irq_enabled=0`（空闲计数不涨） | 一直使能 → IRQ 风暴数万次/分钟 | `disable_irq`，`irq_enabled=0` |
+| `irq` sysfs 属性 | **实时电平**（手指压住=1，空闲=0） | 实时电平 OR 锁存 | **只回实时电平**（`0157cfc6f`） |
+| probe 后的中断状态 | 厂商在 probe 就使能（UOS 启动期能看到 96 次脉冲） | 一直使能 | `disable_irq`，`irq_enabled=0` |
 | 中断 flags | `IRQF_ONESHOT\|IRQF_EARLY_RESUME\|TRIGGER_RISING`(0x6001)；`dev->@808==1` 时双边沿(0x6003) | `TRIGGER_RISING\|ONESHOT` | 同（未做 0x6003 分支） |
 
 修完后空闲状态与 UOS 完全一致（`irq_enabled=0`、计数 0），等待期间 daemon 正常
 `enable→poll→disable` 翻转（实测 0/1 交替）。
 
-**仍差一环**：`fpc_tac_check_irq_status` 在 6.18 恒为 **6**，UOS 触按时为 **0**。
-TEE 日志显示 TA 每 20ms `init_finger_detect → SwitchToFdtDown → 立刻收到 cmd 0xb0
-→ check_irq_status=6`：等待期间中断线仍在风暴，HAL 的 poll 立刻"成功"，FDT 被反复
-重新武装，手指事件来不及锁存。
+**仍未直接验证的一环**：`fpc_tac_check_irq_status` 在真人触摸时是否像 UOS 那样回 **0**。
+自激循环已于 2026-10-24 修掉（§6.23），僵持点不再是“每 20ms 重来一次”，而是“没有任何
+手指去打破 `poll()`”。
 
 **UOS 侧数据是好的**：同一套模板在 UOS `Identify` 得到
 `result: 0 score: 10000 index: 1 coverage: 100 quality: 84`。
@@ -1198,14 +1202,86 @@ TEE 日志显示 TA 每 20ms `init_finger_detect → SwitchToFdtDown → 立刻�
 `_IoHubExec is fdt cmd , must wait for intr after don't free cmd` —— 说明 UOS 上这条
 SPI 命令会保持挂起等中断。
 
-**下一步**：补
-`0x6003` 双边沿分支与 `fingerprint,irq_custom_scheme` 等 DT 属性；确认传感器的
-IRQ 线在 FDT 模式下的电平语义（现在 `gpio-2 ... in lo`，武装后风暴说明它被拉高）。
+**当时列出的下一步**（`0x6003` 双边沿、`irq_custom_scheme`、pinctrl 等）最后都不是
+原因，见 §6.23。
 
 **调试备忘**：`/dev/teelog` 是二进制环缓冲（`cat /dev/teelog | tr -c '[:print:]\n'
-'\n' | grep -aE '.{8,}'`，先 `cat /dev/teelog >/dev/null` 清空）；别用脚本轮询
-`/sys/.../fingerprint/irq`（读后清锁存，会把事件从 daemon 手里抢走）；UOS 的 daemon
-日志在 `/data/var/log/fp_kirin/`。
+'\n' | grep -aE '.{8,}'`，先 `cat /dev/teelog >/dev/null` 清空）；看中断率用
+`/sys/devices/platform/fingerprint/irq_count`（只读、不清零）或 `/proc/interrupts`，
+**别**用脚本轮询 `irq`（它现在回实时电平，以前的版本会清锁存、把事件从 daemon
+手里抢走）；UOS 的 daemon 日志在 `/data/var/log/fp_kirin/`。
+
+### 6.23 自激循环的根因：`irq` 属性应当是“实时电平”，不是“锁存”（`0157cfc6f`）
+
+**现象**：6.18 上 identify 时 HAL 每 ~20 ms 走一圈：
+`ENABLE_IRQ(0x6601)` → 读 sysfs `irq` → TA `check_irq_status`（恒 6）→
+`DISABLE_IRQ(0x6602)` → TA `finger_detect`；`fpc_tac_finger_detect` 468 次/10 s，
+与 IRQ 增量一一对应。
+
+**strace 出来的真实顺序**（`strace -X raw -e trace=ioctl,openat,read`，一圈）：
+
+```
+.960670 ioctl(6, 0x6602, 0)        = 0   DISABLE_IRQ
+.961470 ioctl(8, 0xc0b07403, ...)  = 0   TA finger_detect（武装 FDT）
+   ...16 ms...
+.977718 ioctl(6, 0x6601, 0)        = 1   ENABLE_IRQ
+.978464 openat(dir, "irq"); read → "1"   HAL 读 irq 属性
+.978543 ioctl(8, 0xc0b07403, ...)  = 0   TA check_irq_status → 6
+```
+
+关键：**武装发生在 ENABLE 之前**，而传感器对每条 FDT 命令都会把 IRQ 线脉冲拉高一次。
+那一刻中断是关着的，脉冲变成 GPIO 控制器里的一个 pending edge，`enable_irq()` 一解除
+屏蔽就补投递给我们。我们把它锁存进 `irq` 属性并报 `1`，HAL 于是认为“手指来了”，去问
+TA（TA 里当然没有手指）拿到 6，再关中断、再武装——自激。
+
+**UOS 4.19 侧的对照**（2026-10-24 自动采集，原始数据在远程机
+`/data/l410-uos-probe/`）：
+
+| 观测 | UOS 4.19 | 6.18（修前） |
+|---|---|---|
+| HAL 启动到空闲的 IRQ | 96（传感器上电/初始化 SPI 命令的脉冲；驱动 probe 就使能了中断） | 0（我们在 probe 把中断关了） |
+| 空闲等待时的 IRQ | 0（`poll()` 一挡就是 31 分钟，见 fp_hal.log 10:24 那条） | ~48/s |
+| `fpc_ree_device_wait_irq` 日志 | 一次，之后阻塞 | 每 20 ms 一条 + `error irq ,should wait finger down` |
+| `.../fingerprint/irq` | **0**（空闲；不是锁存） | 1（锁着一个 pending edge） |
+| `.../fingerprint/irq_enabled` | 0（空闲） | 0/1 翻转 |
+| PIN65（GPIO746，IRQ）IOMG / IOCG | `0x00000000` / `0x00000000` | 完全相同 |
+| PIN111（GPIO281，reset）IOCG | `0x00000001` | 完全相同 |
+| 厂商驱动 claim 的 GPIO | 只有 reset（`pin 111 → fa8b7000.gpio:281`），IRQ 脚不 claim | 两者都 claim |
+
+即：**引脚复用和上下拉两边逐位相同，不是 pinctrl 问题**；TA 侧在 UOS 上其实也会打出
+`_IoHubExec is fdt cmd , must wait for intr after don't free cmd`，只是 HAL 根本不进那个
+循环。差别只在“`irq` 属性报什么”。厂商驱动的这个属性就是**线的实时电平**：没有手指 =
+0，手指压住（传感器保持拉高）= 1。HAL 正是按这个语义写的：`ENABLE → 读 → 读到 0 才
+poll(POLLPRI)`，`sysfs_notify()` 负责唤醒。
+
+**修复**：`irq_show()` 只回 `gpiod_get_value()` 的实时电平；锁存标志仍保留给
+`FP_IOC_CMD_GET_IRQ_STATUS`（这个 HAL 不用它），`ENABLE_IRQ` 时照旧清锁存/计数；
+新增只读属性 `irq_count`（累计中断次数，读不清零）——看脉冲率不用再去抢 `irq`。
+
+**实测效果**（同一台机、同一套模板、无人触摸）：
+
+```
+一次 identify：irq +1，irq_count +1，之后 HAL 停在 fpc_ree_device_wait_irq
+再等 30 秒：IRQ +0，日志无新行          ← 与 UOS 的空闲状态一致
+quick.sh：195 pass / 1 fail（pmic.rtc，见下）
+```
+
+顺手修掉的一个测试环境问题：RTC 实际按 UTC 走，但 `/etc/adjtime` 写着 `LOCAL`，
+`quick.sh` 的 `pmic.rtc` 因此差 28799 s。远程机上执行 `sudo timedatectl set-local-rtc 0`
+后 CPU/RTC 一致，该用例转 PASS。
+
+**尚未验证**：真正用手指触摸 → `irq` 读到 1 → TA `check_irq_status` 是否回 0 → 采图/比对。
+这一步必须机主在机器旁做：
+
+```sh
+ssh zhtsg-remote
+sudo /usr/local/sbin/fingerprintctl session
+sudo /usr/local/sbin/fingerprintctl identify zhtsg     # 10 秒内轻触电源键上的传感器
+sudo tail -20 /var/log/fp_kirin/fp_hal.log             # 期待 check_irq_status retval: 0
+                                                       # 以及 Identify took ... (result: 0 ...)
+sudo cat /sys/devices/platform/fingerprint/irq_count   # 触摸一次应 +1
+```
+
 
 ## 7. 验证与诊断测试
 

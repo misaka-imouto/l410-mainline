@@ -261,6 +261,30 @@ if [ -c /dev/fingerprint ]; then
 else
 	inf "fingerprint: /dev/fingerprint not present (huawei_fingerprint module/built-in)"
 fi
+# The sensor's IRQ line is only pulsed by "switch to finger-detect" commands and
+# by a real touch.  An idle machine must therefore see no (or almost no) edges:
+# a growing counter here means the HAL is re-arming in a loop again (that used to
+# happen because the sysfs "irq" attribute reported a latched edge instead of
+# the live line level, 0157cfc6f).
+FP_IRQ_COUNT=/sys/devices/platform/fingerprint/irq_count
+FP_IRQ=/sys/devices/platform/fingerprint/irq
+if [ -r "$FP_IRQ_COUNT" ] && [ -r "$FP_IRQ" ]; then
+	c0=$(cat "$FP_IRQ_COUNT" 2> /dev/null || echo x)
+	lvl=$($S cat "$FP_IRQ" 2> /dev/null || echo x)
+	sleep 2
+	c1=$(cat "$FP_IRQ_COUNT" 2> /dev/null || echo x)
+	case "$c0$c1" in
+	*x* | "") inf "fingerprint: irq_count unreadable" ;;
+	*)
+		d=$((c1 - c0))
+		[ "$lvl" = 0 ] || [ "$lvl" = 1 ] && lvl="level $lvl" || lvl="level ?"
+		[ "$d" -le 5 ] && ok "fingerprint: irq is the line $lvl, $d idle interrupt(s) in 2 s" \
+			|| bad "fingerprint: $d idle interrupts in 2 s, HAL re-arming? (see fingerprint.md 6.23)"
+		;;
+	esac
+else
+	inf "fingerprint: irq_count not exposed, cannot check idle interrupt rate"
+fi
 
 echo "== laptop: $pass passed, $fail failed, $warn warnings"
 [ $fail = 0 ]

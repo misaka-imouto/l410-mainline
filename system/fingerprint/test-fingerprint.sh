@@ -48,7 +48,10 @@ if [ -d "$SYSFS_DIR" ]; then
         info "Module ID: $(cat $SYSFS_DIR/module_id 2>/dev/null || true)"
     fi
     if [ -f "$SYSFS_DIR/irq" ]; then
-        info "Sensor IRQ Pin: $(cat $SYSFS_DIR/irq 2>/dev/null || true)"
+        info "Sensor IRQ line (live level): $(cat $SYSFS_DIR/irq 2>/dev/null || true)"
+    fi
+    if [ -f "$SYSFS_DIR/irq_count" ]; then
+        info "Sensor interrupts so far: $(cat $SYSFS_DIR/irq_count 2>/dev/null || true)"
     fi
 else
     warn "Sysfs directory $SYSFS_DIR not found."
