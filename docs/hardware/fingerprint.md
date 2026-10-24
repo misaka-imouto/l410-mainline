@@ -6,10 +6,10 @@
 在 Linux 6.18 主线内核中，我们通过引入 **iTrustee tzdriver** 安全客户端网关驱动与 **huawei-fingerprint** 平台驱动，完整打通了从内核设备节点、TrustZone 通信通道到用户态守护进程与桌面 PAM 生物认证的完整技术栈。
 
 > **当前状态（2026-10-24）**：整条栈已实机跑通——录入、识别、模板落盘、KDE 设置、
-> `fprintd` D-Bus 替身、`sudo` 指纹、KDE 锁屏解锁都验证过。待办：
-> ① 删除已录入模板（`l410-fp-del` 待实机确认 ABI）；② SDDM 登录界面指纹；
-> ③ **一次真实触摸的回归**（等待/中断语义已按 UOS 对齐，见 §6.23，但没有手指在机器旁
-> 时只能验证到“HAL 正常阻塞在 poll()”）。
+> `fprintd` D-Bus 替身、`sudo` 指纹、KDE 锁屏解锁都验证过；HAL 等待/中断语义已按 UOS
+> 对齐（§6.23），2026-10-24 的真手指触摸回归也通过了（识别 + 锁屏解锁）。待办：
+> ① 删除已录入模板（`l410-fp-del` 的 ABI 已打通，但删除路径被 D-Bus 卡住，见 §6.20.3）；
+> ② SDDM 登录界面指纹。
 > 下文 §5~§6.19 是调试过程记录，里面的“阻塞/未做”只代表当时；
 > 当前结论看 §6.20、§6.23 和 [known-issues.md](../known-issues.md)。
 
@@ -1287,17 +1287,38 @@ quick.sh：195 pass / 1 fail（pmic.rtc，见下）
 `quick.sh` 的 `pmic.rtc` 因此差 28799 s。远程机上执行 `sudo timedatectl set-local-rtc 0`
 后 CPU/RTC 一致，该用例转 PASS。
 
-**尚未验证**：真正用手指触摸 → `irq` 读到 1 → TA `check_irq_status` 是否回 0 → 采图/比对。
-这一步必须机主在机器旁做：
+**真实触摸回归（2026-10-24 16:39，机主配合）：通过**
+
+```
+16:39:17.398 fpc_tac_finger_detect                  ← 开始武装 FDT
+16:39:17.415 fpc_tac_finger_detect, retval: 0
+16:39:17.415 fpc_ree_device_wait_irq                ← 阻塞在这里
+16:39:18.199 fpc_tac_check_irq_status, retval: 0    ← 修前恒为 6
+16:39:18.201 wait_finger_down, took 803 ms          ← 触摸后 803 ms 醒来
+16:39:18.304 fp_capture_image_for_identify: fp TA identify took 101 ms
+16:39:18.315 Identify took 9 ms (result: 2 score: 80 index: 1 coverage: 100 quality: 85)
+16:39:18.335 ###########update template begin ... end   ← 自适应模板更新
+```
+
+D-Bus 侧 `fingerprintctl identify zhtsg` 返回 `i 0`（成功）。同一次触摸还被 KDE 锁屏的
+`net.reactivated.Fprint` 替身抓到：`identify result=0 (right-middle-finger)` →
+`unlock-session 14 / 2 / 1`，即锁屏“摸一下即解锁”也实测通过。
+（`result: 2` 是 HAL 内部的“匹配并更新模板”，UOS 上同样出现过 `result: 2 score: 60`。）
+
+重复验证命令（必须有人能碰到传感器）：
 
 ```sh
 ssh zhtsg-remote
 sudo /usr/local/sbin/fingerprintctl session
-sudo /usr/local/sbin/fingerprintctl identify zhtsg     # 10 秒内轻触电源键上的传感器
-sudo tail -20 /var/log/fp_kirin/fp_hal.log             # 期待 check_irq_status retval: 0
-                                                       # 以及 Identify took ... (result: 0 ...)
-sudo cat /sys/devices/platform/fingerprint/irq_count   # 触摸一次应 +1
+sudo timeout 20 /usr/local/sbin/fingerprintctl identify zhtsg   # 10 秒内轻触传感器
+sudo tail -20 /var/log/fp_kirin/fp_hal.log    # 期待 check_irq_status retval: 0
 ```
+
+**一个容易误判的现象**：`irq_count` 会随着 HAL 的常规 TA 命令（shim 定时
+`ListEnrolledFingers`、会话建立时的传感器 SPI 通信、上电时序……）缓慢增长——传感器对
+不少 SPI 命令都会回一个脉冲（UOS 启动阶段也能看到 96 次）。判断是否“自激”要看的是
+**空闲等待期间**的增量和 `fpc_ree_device_wait_irq` 日志条数（正常是一圈一条然后就安静），
+不是绝对计数。
 
 
 ### 6.24 sysfs 面与厂商驱动对齐（`ccfc896ce`）

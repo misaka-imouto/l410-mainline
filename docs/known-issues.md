@@ -41,16 +41,17 @@
 - EC 键盘/触摸板的 HID 描述符开机首次读可能回全 0（`unexpected HID descriptor bcdVersion (0x0000)`）。
   `.2` 之后的 `i2c_hid_fetch_hid_descriptor()` 重试 3 次（间隔 20 ms）；在那之前这一下
   可能让键盘整个启动周期都不出现。
-- 指纹：**端到端可用**。TEE 网关、TA、SFS 模板存储、录入、识别、KDE 设置的录入/识别、
+- 指纹：**端到端可用**，2026-10-24 又做了一次真手指触摸回归：识别成功
+  （`check_irq_status retval: 0`、score 80/index 1、模板自适应更新）且 KDE 锁屏
+  “摸一下即解锁”生效。TEE 网关、TA、SFS 模板存储、录入、KDE 设置、
   `fprintd` 接口（替身服务 `net.reactivated.Fprint`）和 `sudo` 指纹都已实机验证。
-  细节见 [hardware/fingerprint.md](hardware/fingerprint.md) §6.17~6.23。
   HAL 的等待/中断语义已于 2026-10-24 按 UOS 对齐（`irq` 属性=线的实时电平，
   `0157cfc6f`）：空闲时 HAL 正常阻塞在 `poll()`，不再每 20 ms 重新武装一次。
-  待办：① 一次**真实触摸**的回归（§6.23 末尾有命令，必须机主在旁边）；
-  ② 已录入的旧模板删不掉：`l410-fp-del` 现在能调进厂商 HAL 了（`bbebe6b`），
+  细节见 [hardware/fingerprint.md](hardware/fingerprint.md) §6.17~6.24。
+  待办：① 已录入的旧模板删不掉：`l410-fp-del` 现在能调进厂商 HAL 了（`bbebe6b`），
   但模板计数来自运行中的 daemon（D-Bus），停了 daemon 拿到 0、开着 daemon 又会卡在
   `CommonInitFingerprint`，所以删除需要重新设计（§6.20.3）；
-  ③ KDE 6.3 锁屏没有 UOS 那种指纹/密码 tab，
+  ② KDE 6.3 锁屏没有 UOS 那种指纹/密码 tab，
   指纹成功由替身 `loginctl unlock-session` 兜底解锁；④ SDDM 登录界面仍是纯密码。
   另外开机后第一次 TA open session 可能以 `0xFFFF6004` 失败一次，daemon 自己重试，
   指纹可用时间因此晚约 14 秒（见下）。
