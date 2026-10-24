@@ -1118,6 +1118,64 @@ sudo grep -a primary_indices_count /var/log/fp_kirin/fp_hal.log | tail -1
 考虑到旧模板本身无害（那根手指也能解锁），这件事排在锁屏/PAM 回归之后。
 
 
+### 6.21 传感器 -99 的根因：报给 TA 的复位脚编号错了（linux-l410 `dd115be17`）
+
+**现象**：6.18 上 `fpc_tac_finger_detect` 恒 `-99`、指纹 IRQ 计数 0；同一硬件在
+UOS 里返回 `0`。软重启、硬断电、复位脉冲、换 DAEMON 都没用。
+
+**定位**：`kirin990_tlogger=1` 打开 TEE 日志（`/dev/teelog`，二进制环缓冲，用
+`cat /dev/teelog | tr -c '[:print:]\n' '\n' | grep -aE '.{8,}'` 读）后一目了然：
+
+```
+[HM] g_os_platform = 3, fpc reset_gpio_pin = 199, irq_gpio_pin = 234, spi_cs =10, spi_num = 1
+fp_init_sensor: Hello fpkit
+[platdrv] not find the spi num
+gpio_read_write ... error  -> do_timing_node failed -7 -> func_init_sensor_prepare failed -7
+fp_init_sensor: Product_id=255 Sensor_id=3658     (255 = 0xFF = 无效)
+libgxfp_set_fdt_down ... LogicContext is null
+fp_init_finger_detect: Failed and error=-99
+```
+
+TA 的 `fp_init_sensor` 用 `FP_IOC_CMD_GET_DEVICE_INFO` 拿到的引脚号去做**传感器上电
+时序**（经 TEE 的 secure-GPIO 驱动）。固件 DT 里那句陈旧的
+`fingerprint,reset_gpio = <199>` 被驱动原样报了过去，而 199 和传感器无关：上电
+时序失败 → 传感器模块从未初始化（`LogicContext is null`）→ 之后一切命令 `-99`。
+
+**厂商编号是 `bank * 8 + line` 的 "custom" 编号**（UOS 日志 `fpc reset_gpio_pin =
+281, irq_gpio_pin = 234`）：
+
+| 线 | DT 节点 | 计算 | 报给 TA 的值 |
+|---|---|---|---|
+| reset | `fa8b7000` line 1 | 35*8+1 | **281** |
+| irq | `fa8b1000` line 2 | 29*8+2 | **234** |
+
+（Linux 全局号 793/746 也不行，试过，TA 一样失败。）
+
+**修法**：`l410/dt/fixups.d/09-laptop.dtsi` 里覆盖
+`fingerprint,reset_gpio = <281>` / `fingerprint,irq_gpio = <234>`，驱动
+`FP_IOC_CMD_GET_DEVICE_INFO` 如实上报。修好后 TEE 日志出现
+`func_init_sensor: module_info: 23100501TC38A1109051209P...`（真实模组 ID），
+`finger_detect` 恢复 0，IRQ 开始计数。
+
+### 6.22 中断链路：`ENABLE_IRQ` 要返回 1，`irq` 属性要锁存（`d68b83c2d`）
+
+继续 strace `fingerprint_daemon` 发现 HAL 的 `fpc_ree_device_wait_irq()`：
+
+- 每轮 `ioctl(0x6601 ENABLE_IRQ)` → `ppoll(fd, 200ms)` → `ioctl(0x6602 DISABLE_IRQ)`
+  → TA `check_irq_status`；
+- 厂商驱动的 `fp_ioc_enable_irq` **成功时 `return 1`**，我们的桩返回 0，HAL 于是
+  认为"中断没武装"，每 ~20ms 重来一次，永远走不到 `check_irq_status`。
+- 传感器只**脉冲** IRQ 线（`gpio-2 ... in lo`），而 HAL 轮询 `irq` 这个 sysfs
+  属性 → 驱动要在 handler 里锁存、读时清除，并 OR 上实时电平。
+
+**仍差一环**：NS 侧 GPIO 中断在响，但 TA 的 `fpc_tac_check_irq_status` 返回 **6**
+（正常应是 **0**），即 TA 没通过它自己的通道看到 finger-down。下一步在 UOS 上做
+同样的 strace + TA 日志对比。
+
+**调试注意**：别用脚本轮询 `/sys/bus/platform/devices/fingerprint/irq`，它现在是
+读后清锁存，轮询会把事件从 daemon 那里抢走。
+
+
 ## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
