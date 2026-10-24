@@ -238,7 +238,7 @@ Chromium 极限滚动，平衡档，多数配置测 2 轮（基线见"现状"）
 - 切 performance governor：不需要，三档电源模式加输入 boost 已经覆盖交互场景。
 - `KWIN_DRM_PREFER_COLOR_DEPTH=24`：kirin990-dss 只提供 32 bpp 的 XRGB/ARGB，eDP 链路本身是 24 bpp，没有 30-bit。
 - `AllowTearing`：只对主动请求撕裂的全屏游戏生效，对桌面没用。
-- 给 Chromium 用 Vulkan（PanVK）：Bifrost v7 上的 PanVK 不是 conformant 的，Mesa 也不在 v7 上启用它。
+- 给 Chromium 用 Vulkan（PanVK）：Bifrost v7 上的 PanVK 不是 conformant 的，上游 Mesa 也不在 v7 上启用它；本项目通过 `system/mesa/mesa-patch.py` 打补丁启用了它（见 [hardware/graphics.md](../hardware/graphics.md)），但不建议把 Chromium 切到 Vulkan。
 - 按 Google Chrome 官方包写的参数配置：这里用的是 Debian 的 chromium，包装脚本不同，参数放在 `/etc/chromium.d/`。
 - 开 X11 会话对比：6.7 还有 X11 会话，但本项目的测量工具都是按 Wayland 写的，对照意义不大。
 

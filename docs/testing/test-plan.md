@@ -495,7 +495,7 @@
 | SEC-08 | WiFi 攻击面 | 实验室注入畸形管理帧和信标不 oops；厂商代码的拷贝路径做一次安全审查 | L | P1 | |
 | SEC-10 | CVE 跟踪 | 有 6.18.y 安全修复的同步流程；说明厂商驱动不在上游 CVE 覆盖范围内 | M | P1 | |
 | SEC-11 | USB 存储管控 | 需要时能用 usbguard 或 udev 规则按策略禁用 U 盘 | S | P2 | |
-| SEC-12 | 没有 TPM 和指纹的影响 | 对全盘加密、登录方式的影响有书面说明 | M | P1 | |
+| SEC-12 | 没有 TPM 的影响（指纹已可用） | 对全盘加密、登录方式的影响有书面说明 | M | P1 | |
 | SEC-13 | 自动登录与远程登录 | sddm 自动登录、sshd 密码登录和 root 登录出厂默认关闭 | A | P0 | quick（`--profile prod`） |
 
 ### 可维护与诊断（SVC）
@@ -582,9 +582,9 @@
 
 ## 不支持的功能
 
-交付前要逐项确认并写给用户：指纹（传感器在 TEE 后面，6.18 没有对应的驱动）；TPM（固件设备树里是 disabled）；NPU；ISP；
-硬件视频编码；DP/HDMI 外接显示和 DP 音频；USB OTG/gadget、BC1.2、Type-C PD 角色切换；KVM（固件只给 EL1）；
-UFS inline 加密、RPMB、HPB；hi110x 模块不能卸载；休眠到磁盘、WiFi 热点/P2P、Vulkan（如果测下来不可用）。
+交付前要逐项确认并写给用户：指纹（已可用，但删除旧模板、SDDM 登录仍未完成）；TPM（固件设备树里是 disabled）；NPU；ISP；
+USB OTG/gadget、BC1.2、Type-C PD 角色切换；KVM（固件只给 EL1）；
+UFS inline 加密、RPMB、HPB；hi110x 模块不能卸载；休眠到磁盘。
 
 ## 还没有脚本的用例
 

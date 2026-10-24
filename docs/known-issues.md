@@ -1,6 +1,6 @@
 # 已知问题
 
-截至 2026-10-01，内核 6.18.54-l410，Debian forky（Plasma 6.7.4，Mesa 26.1.6）。
+截至 2026-10-23，内核 6.18.54-l410（分支在 tag `.2` 之后 62 个提交，`.3` 尚未打 tag），Debian forky（Plasma 6.7.4，Mesa 26.1.6）。
 
 ## 没做的硬件
 
@@ -16,7 +16,7 @@
 
 ## 已知缺陷
 
-- ~~tzdriver 的 `ipihelper` 内核线程永久 D 态~~（v6.18.54-l410.3，尚未打标）：`kthread_create_worker()`
+- ~~tzdriver 的 `ipihelper` 内核线程永久 D 态~~（分支已修，将随 `v6.18.54-l410.3`；当前 tag 仍是 `.2`）：`kthread_create_worker()`
   之后用 `tz_kthread_bind_mask()` 绑定未启动的线程，`kthread_bind_mask()` 内部
   `wait_task_inactive(TASK_UNINTERRUPTIBLE)` 会把它留在无唤醒的睡眠里（`siqthread` 之所以正常
   是因为绑定后紧跟一句 `wake_up_process()`，`ipihelper` 漏了）。症状：每 ~2 分钟一条 hung task
@@ -27,7 +27,7 @@
 - 看门狗（v6.18.54-l410.1 已修）：固件在进内核前已经启动 AP 看门狗 WDT0（SP805，0xfe026000），交给内核时约剩 60 s，中断经 BL31 转成 FIQ。
   v6.18.54-l410 带 `l410_deadman=0` 启动会在开机约 60 s 时 panic（"FIQ taken without a root FIQ handler"）。v6.18.54-l410.1 的内核开机就接管并停掉它。
   为了让旧版内核也能用，`boot/install-kernel.sh` 仍会去掉 `l410_deadman=0`，`system/hardware/l410-watchdog-off.service` 开机后再停一次，对新内核没有影响。
-- 睡眠：s2idle 正常（默认）。v6.18.54-l410.3 起 `smc_svc_thread` 也能被冻结，
+- 睡眠：s2idle 正常（默认）。`.2` 之后的提交（将随 `v6.18.54-l410.3`）里 `smc_svc_thread` 也能被冻结，
   挂起真正完成（以前每次都在 "Freezing remaining freezable tasks failed" 卡 20 秒后放弃）。
   副作用：**空闲的机器现在真的会睡下去**，而 s2idle 没有 WoWLAN，唤醒源只有电源键/上盖/RTC，
   远程 SSH（frp）会直接消失 —— 测试机上先跑 `dev/testrig-nosleep.sh`。键盘唤醒与开盖唤醒已通过 `09-laptop.dtsi` 设备树修补补充 `wakeup-source;` 属性彻底解决（拼图 0），实测按键/开盖即醒。
@@ -39,7 +39,7 @@
 - WiFi：开机校准偶尔要 9 秒；蓝牙串口（BUART）走 PIO，没有 DMA；驱动不能卸载；PCIe RC1 一旦 completion timeout 不会自己恢复。
   NetworkManager 每次连接时第一次 connect 会被拒，重扫后成功，多花约 1 秒。
 - EC 键盘/触摸板的 HID 描述符开机首次读可能回全 0（`unexpected HID descriptor bcdVersion (0x0000)`）。
-  v6.18.54-l410.3 起 `i2c_hid_fetch_hid_descriptor()` 重试 3 次（间隔 20 ms）；在那之前这一下
+  `.2` 之后的 `i2c_hid_fetch_hid_descriptor()` 重试 3 次（间隔 20 ms）；在那之前这一下
   可能让键盘整个启动周期都不出现。
 - 指纹：**端到端可用**。TEE 网关、TA、SFS 模板存储、录入、识别、KDE 设置的录入/识别、
   `fprintd` 接口（替身服务 `net.reactivated.Fprint`）和 `sudo` 指纹都已实机验证。

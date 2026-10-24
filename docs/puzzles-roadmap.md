@@ -2,7 +2,7 @@
 
 本文档归档与系统化记录华为擎云 L410（KLVU-WDU0B，麒麟 990 / Hi3690 + Mali-G76）在主线 Linux 6.18+ 与开源 Debian 生态下的**全硬件功能补完计划（5 大核心硬件拼图）**。
 
-通过逆向分析出厂内核（4.19.71-kr990）、海思 HiKey970 开放源码与 ARM/Linux 上游标准驱动模型，我们将原本深度依赖闭源二进制组件和厂商旧内核的硬件部件，逐一迁移重构为符合现代 Linux 主线标准的开源驱动，打造纯净、无任何厂商闭源 blob 的高性能 Linux 笔记本体验。
+通过逆向分析出厂内核（4.19.71-kr990）、海思 HiKey970 开放源码与 ARM/Linux 上游标准驱动模型，我们将原本深度依赖闭源二进制组件和厂商旧内核的硬件部件，逐一迁移重构为符合现代 Linux 主线标准的开源驱动，打造除必须的厂商固件（WiFi/蓝牙固件、指纹 TA/teecd）之外不再依赖厂商内核和闭源 libmali 的高性能 Linux 笔记本体验。
 
 ---
 
@@ -232,11 +232,14 @@ L410 的右上角电源键集成了 FPC 电容式指纹传感器（识别码 `0x
 2. **服务与守护进程整合** (`system/fingerprint/install.sh`)：
    - 自动验证并链接华为签名指纹 TA（`a32b3d00-cb57-11e3-9c1a-0800200c9a66.sec`）。
    - 启用 `teecd.service`（TEE 客户端守护进程）与 `hwfp_init.service`（`fingerprint_daemon`）。
-   - 对接 `deepin-authenticate.service`，注册 DBus `com.huawei.Fingerprint`，并联动 Linux PAM（`pam_deepin_authentication.so` / `pam_fprintd.so`）。
+   - 安装 `fprintd` D-Bus 替身 `l410-fprintd-shim`（持有 `net.reactivated.Fprint`，代理到 `com.huawei.Fingerprint`），并配置 `sudo` 与 KDE 锁屏的 `pam_fprintd`。
+   - `deepin-authenticate` 不是必需项；它的 service 存在时会顺手启用，但认证链路不依赖它。
 3. **自动化测试与诊断** (`system/fingerprint/test-fingerprint.sh`)：
    - 提供开箱即用的硬件节点、TA 镜像、守护进程与 DBus 服务完整性自检。
    - 提供 `--monitor` 交互模式，实时监测手指按压电源键产生的中断信号。
 4. **技术规格文档**：在 `docs/hardware/fingerprint.md` 中同步归档完整的物理引脚、TrustZone 交互时序与调试指南。
+
+5. **当前只剩下的收尾**：删除已录入模板（`l410-fp-del` 的 HAL 删除路径待实机确认）、SDDM 登录界面的指纹、以及锁屏“摸一下即解锁”的完整回归。
 
 ---
 

@@ -2,7 +2,7 @@
 
 这一篇讲 L410 上笔记本特有的外设：嵌入式控制器（EC，华为叫 echub）和它管的电池、充电器、静音灯，I2C-HID 键盘和触控板，F 行热键，合盖开关，以及 I2C 总线卡死后的恢复。
 
-6.18 上的做法：EC 是新写的驱动 `drivers/mfd/huawei-echub.c`，电池/充电器 `drivers/power/supply/huawei-echub-battery.c`，静音灯 `drivers/leds/leds-huawei-echub.c`；键盘和触控板用主线 i2c-hid-of，合盖用主线 gpio-keys，都只靠设备树改动（`l410/dt/fixups.d/09-laptop.dtsi`）和配置片段（`l410/configs/09-laptop.config`）。键盘、触控板的 HID 报告描述符和厂商内核逐字节一致，电池读数和厂商内核一致。指纹不支持。
+6.18 上的做法：EC 是新写的驱动 `drivers/mfd/huawei-echub.c`，电池/充电器 `drivers/power/supply/huawei-echub-battery.c`，静音灯 `drivers/leds/leds-huawei-echub.c`；键盘和触控板用主线 i2c-hid-of，合盖用主线 gpio-keys，都只靠设备树改动（`l410/dt/fixups.d/09-laptop.dtsi`）和配置片段（`l410/configs/09-laptop.config`）。键盘、触控板的 HID 报告描述符和厂商内核逐字节一致，电池读数和厂商内核一致。指纹见 [fingerprint.md](fingerprint.md)。
 
 ## 设备一览
 
@@ -175,12 +175,12 @@ sudo evtest --query /dev/input/eventN EV_SW SW_LID     # N 换成合盖设备；
 
 ## 已知问题
 
-- 键盘不能唤醒系统；合盖、电源键唤醒没有实测。
+- 键盘、合盖、电源键的 s2idle 唤醒已实测（拼图 0，见 [sleep.md](sleep.md)）；热键和合盖的“动作”仍需人工测：热键用 evtest 手按验证过一次。
 - 静音灯不跟随静音状态，见上文。
 - EC 调压器（echub-power）没有移植：设备树里没有节点引用它。面板和 eDP 桥的供电是 SoC GPIO，不走 EC LDO，`EC_1V2_EN`、`EC_DSI_VCCIO_ON` 在这台机器上用不到。以后真要用，命令寄存器 0x02B2，开 = 基址 + 1。
 - 热键、合盖的实际动作只能人工测：热键用 evtest 手按验证过一次。
 - EC 的 mfd 子设备启动时有 "DMA mask not set" 提示，无害。
-- 指纹不支持：传感器在 TEE（iTrustee）后面，6.18 没有 tzdriver，也没有厂商 HAL。
+- 指纹已端到端可用（TEE + 厂商 daemon + `fprintd` 替身），见 [fingerprint.md](fingerprint.md)；未完成的只有删除旧模板和 SDDM 登录。
 
 ## 试过但没用
 

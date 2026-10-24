@@ -13,6 +13,7 @@ sudo system/install.sh --user alice    # 指定桌面用户（默认是调用 su
 | `base/` | 中文 locale、Asia/Shanghai、RTC 本地时间、主机名、桌面用户、ssh、NetworkManager（通用有线配置）、fcitx5 |
 | `desktop/` | SDDM（Wayland，可选自动登录）、timesyncd、AppArmor，关掉 smartd 和 networkd-wait-online |
 | `hardware/` | 停掉固件留下的看门狗 WDT0 的服务、UFS 固件 LUN 只读规则、F 行热键 hwdb、regulatory.db 与国家码 CN、Hi6405 的 UCM、fq_codel |
+| `fingerprint/` | 指纹 udev 规则、`com.huawei.Fingerprint` D-Bus 策略、`teecd`/`hwfp_init` 单元、`fprintd` D-Bus 替身（`net.reactivated.Fprint`）、`sudo`/KDE 锁屏的 PAM 布局、`l410-fp-status.sh`。需要 `/data` 已挂载（TA 的 SFS） |
 | `perf/` | tuned profile `l410-powersave/balanced/performance`、`profile.sh`、`l410-perfd`、KWin 脚本、systemd 片段 |
 | `sched-ext/` | `scx-lavd.service`、`scx-run`、scx 的两个补丁和构建脚本 |
 | `mem/` | `mem-tune`、sysctl、systemd-oomd 配置、cgroup 内存保护、IO 调度器规则 |

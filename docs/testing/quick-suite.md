@@ -1,7 +1,7 @@
 # 快速自检 `tests/quick.sh`
 
 `tests/quick.sh` 是 [测试计划](test-plan.md) 里能无人值守、能自动判定、跑得快的那部分，做成了一个脚本。
-它有 21 个模块、约 200 项判定，完整模式约 1 分钟（一次实测 63 s），`--fast` 跳过负载、I/O、放音、渲染和扫描，半分钟以内。
+它有 22 个模块、约 200 项判定，完整模式约 1 分钟（一次实测 63 s），`--fast` 跳过负载、I/O、放音、渲染和扫描，半分钟以内。
 换内核、装包、改配置之后都可以跑一次。结果直接给出 PASS/FAIL，不需要人看屏幕、听声音、按键或插拔。
 
 ### 板型差异（2026-10-23）
@@ -100,11 +100,11 @@
 在 `tests/quick.sh` 开头，每行 `<检查ID 通配> <计划ID> <原因>`。列在里面的检查失败时记 XFAIL，不计入失败；通过时记 XPASS。
 修好一项、出现 XPASS 就删掉对应行。新发现的问题只有在确认短期内不修时才加进来，这样 `RESULT: PASS` 始终表示“没有新的回归”。
 
-当前清单只有一行：
+当前清单只有一行（以 `tests/quick.sh` 的 `KNOWN` 为准）：
 
 | 检查 | 用例 | 原因 |
 |---|---|---|
-| `dsp.edid-size` | DSP-08 | 连接器报告的物理尺寸是 0×0 mm（没有经 eDP 桥读 EDID） |
+| `ec.mute-led` | AUD-12 | EC 偶尔对静音灯写入返回状态错误（重试 3 次、间隔 10 ms 后成功，灯本身能切换） |
 
 ## dev 与 prod 两种档
 
@@ -356,7 +356,7 @@ systemd 对 SysV 脚本的提示、staging 模块的 taint 提示等。`tests/uf
 | dsp.underflows / dsp.frames | kirin_frames | underflows 0；记录 vblank、翻页、延迟 | |
 | dsp.commit-thread | kirin-commit 线程 | SCHED_FIFO 50 | |
 | dsp.vblank-rate | 等 60 个 vblank（`DRM_IOCTL_WAIT_VBLANK`，DPMS 关时不做） | 60.2 到 60.8 Hz | ✓ |
-| dsp.edid-size | 连接器物理尺寸 | 不是 0x0（已知失败，在 `KNOWN` 里） | |
+| dsp.edid-size | 连接器物理尺寸 | 不是 0x0 | |
 | dsp.planes | 平面数 | 记录（主平面加光标） | |
 | dsp.backlight | 背光设备 | max 100、亮度 > 0、bl_power 0（亮度 0 就是黑屏） | |
 | dsp.backlight-set | 亮度 ±1 写入、回读、恢复 | 一致 | |

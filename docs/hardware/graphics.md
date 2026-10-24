@@ -327,9 +327,9 @@ bash tests/display-power.sh 3 60     # 3 轮关屏/开屏，每次测功耗 60 s
 
 ## 没有做
 
-- DP/HDMI 视频输出已在 v6.18 中由 `kirin990_dp.c` 原生实现（DWC DP TX + RTD2172 桥片），HDMI/DP 音频暂未接入 ALSA。
+- DP/HDMI 视频输出由 `kirin990_dp.c` 原生实现（DWC DP TX + RTD2172 桥片），DP/HDMI 音频也已接入 ALSA（Card 1 `hisihdmi`，见 [audio.md](audio.md)）。
 - overlay 平面。
-- Vulkan（详见硬件拼图规划）。硬件视频编解码见 [vcodec.md](vcodec.md)。
+- 硬件视频编解码见 [vcodec.md](vcodec.md)；Vulkan 已由 panvk 支持（见 [README](../../README.md)）。
 
 ## 试过但没用
 

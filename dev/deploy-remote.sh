@@ -52,11 +52,14 @@ ssh "$HOST" "sudo sh /tmp/install-kernel.sh /tmp/l410-bundle/ | tail -1
 
 if [ "$KEEP_AWAKE" = 1 ]; then
 	echo "== disabling idle suspend for the desktop user"
+	scp -q "$REPO/dev/testrig-nosleep.sh" "$HOST:/tmp/testrig-nosleep.sh"
 	ssh "$HOST" 'u=$(loginctl list-sessions --no-pager | awk "/seat0/ { print \$3; exit }")
-		sudo -u "$u" XDG_RUNTIME_DIR=/run/user/$(id -u "$u") \
-			bash /opt/l410/dev/testrig-nosleep.sh 2>/dev/null ||
-		sudo cp -a /opt/l410/dev/testrig-nosleep.sh /tmp/ && \
-		sudo -u "$u" XDG_RUNTIME_DIR=/run/user/$(id -u "$u") bash /tmp/testrig-nosleep.sh'
+		if [ -n "$u" ]; then
+			sudo -u "$u" XDG_RUNTIME_DIR=/run/user/$(id -u "$u") \
+				bash /tmp/testrig-nosleep.sh
+		else
+			echo "no seat0 session, skipping"
+		fi'
 fi
 
 [ "$DO_REBOOT" = 1 ] || { echo "== installed, not rebooting"; exit 0; }

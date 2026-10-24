@@ -1,6 +1,6 @@
 # 安装
 
-在一台出厂状态的华为擎云 L410（KLVU-WDU0B）上装 Debian + Linux 6.18，和麒麟并存。
+在一台出厂状态的华为擎云 L410（KLVU-WDU0B 或 KLVU-WDU0）上装 Debian + Linux 6.18，和麒麟并存。
 GRUB、UEFI 都用机器原有的，Debian 只是麒麟 GRUB 菜单里多出的一项。
 
 整个过程分三处做：
@@ -24,11 +24,17 @@ L410 的存储是一颗 UFS，系统看到四个 LUN：`sda`、`sdb`、`sdc` 是
 | sdd4 | KYLIN-BACKUP | 麒麟备份还原 |
 | sdd5 | DATA | 麒麟的 `/data` |
 
+> 这只是一种出厂布局。**这台调试机的实际布局不同**：`sdd1` ESP、`sdd2` SYSBOOT、
+> `sdd3` SYSROOT、`sdd4` KYLIN-BACKUP、`sdd5` Roota（UOS 根）、`sdd6` Rootb（现为
+> Debian）、`sdd7` DATA（`/data`）。不同批次、UOS 重装或 A/B 根分区方案都会改变编号，
+> 所以**绝不能按编号判断用途**，一律先看 `lsblk -f`、`sudo blkid` 和 `findmnt /data`。
+
 Debian 需要一个新分区，至少 32 GB，建议 50 GB 以上。出厂时没有空闲空间，一般从 DATA 缩出来。
 DATA 不是麒麟的根分区，可以在麒麟里卸载后离线缩小。**先备份 DATA 里的东西**，然后（以缩到 150 GB 为例）：
 
 ```bash
 sudo umount /data                      # 有程序占用就先退出它们，或者从麒麟的恢复模式操作
+sudo blkid /dev/sdd5                   # 确认它确实是 DATA，不是麒麟根
 sudo e2fsck -f /dev/sdd5
 sudo resize2fs /dev/sdd5 150G
 sudo parted /dev/sdd unit GiB print    # 记下 sdd5 的起点
@@ -39,7 +45,8 @@ sudo mount /data
 ```
 
 `resizepart` 的终点必须不小于 `resize2fs` 之后的文件系统大小，算不准就多留几 GB。新分区通常是 `/dev/sdd6`，
-下文写作 `/dev/sddN`。
+下文写作 `/dev/sddN`。上面的例子假设 DATA 是 `sdd5`；如果 `blkid` 显示 DATA 是 `sdd7`，
+把命令里的 `sdd5` 和 `resizepart 5` 都换成实际值（例如 `sdd7` / `resizepart 7`）。
 
 ## 2. PC 上编内核
 
@@ -62,6 +69,8 @@ linux-l410/l410/build.sh -o l410-build
 
 不想自己编，可以下载内核发布页的
 [l410-kernel-6.18.54-l410.2.tar.gz](https://github.com/liuwang97/linux-l410/releases/tag/v6.18.54-l410.2)，解开就是同样的 `bundle/`。
+注意：发布页目前最新仍是 `.2`；分支上 `.2` 之后的 tzdriver/指纹、EC 和日志降级修复尚未打 `.3` tag，
+要用这些改动得自己编（或等 `.3` 发布）。
 内核构建的细节见 [kernel.md](kernel.md)。
 
 ## 3. PC 上生成根文件系统
@@ -100,6 +109,10 @@ ssh 主机密钥在生成镜像时产生，一个镜像装多台机器时，在�
 sudo l410-mainline/rootfs/deploy.sh --part /dev/sddN --format \
     --rootfs l410-debian.tar.xz --kernel l410-build/bundle
 ```
+
+> `deploy.sh` 只硬编码拒绝 `sdd1`~`sdd3`（ESP/SYSBOOT/麒麟根）和固件 LUN。
+> 如果这台机器的 UOS 根在 `sdd5`（如当前的调试机），脚本不会帮你拦，
+> 一定要自己确认 `--part` 是 Debian 分区（通常是 `sdd6`）而不是 UOS 根。
 
 `deploy.sh` 依次做这些事：
 
@@ -156,6 +169,7 @@ sudo bash /opt/l410/tests/quick.sh        # 约 1 分钟，不改动系统；--f
 | base | 中文 locale、上海时区、RTC 用本地时间（和麒麟共用）、主机名、桌面用户、ssh、NetworkManager 管有线和 WiFi、fcitx5 | |
 | desktop | SDDM（Wayland，可选自动登录）、NTP、AppArmor、关掉这台机器上只会报错的服务 | [tuning/desktop.md](tuning/desktop.md) |
 | hardware | 停掉固件留下的看门狗 WDT0、UFS 固件分区只读、F 行热键（hwdb）、WiFi 国家码 CN、Hi6405 的 UCM、fq_codel | [hardware/](hardware/) |
+| fingerprint | 指纹 udev 规则、D-Bus 策略、`teecd`/`hwfp_init`、`fprintd` 替身、`sudo` 与 KDE 锁屏的 PAM 布局 | [hardware/fingerprint.md](hardware/fingerprint.md) |
 | perf | tuned-ppd 三档电源模式、l410-perfd、KWin 脚本、按电源切换模式 | [tuning/perf-power.md](tuning/perf-power.md) |
 | sched-ext | 开机启动 scx_lavd | [tuning/sched-ext.md](tuning/sched-ext.md) |
 | mem | zswap + swapfile、sysctl、systemd-oomd、会话内存保护、IO 调度器 | [tuning/memory.md](tuning/memory.md) |
@@ -168,6 +182,11 @@ sudo bash /opt/l410/tests/quick.sh        # 约 1 分钟，不改动系统；--f
 input、mesa、sched-ext、launch、apps 用到几个本地编译的二进制（libinput、libgallium、scx_lavd、systemsettings、
 WPS 的 RSA 垫片）。Debian 的对应软件版本和发布页上预编译文件一致时直接下载（有 sha256 校验，见
 [system/assets.sha256](../system/assets.sha256)），否则提示用同目录的构建脚本重新编译。用 `--snapshot` 生成的系统版本总是一致的。
+
+`fingerprint` 阶段要求 `/data` 已挂载（TA 的 SFS 在 `/data/sec_storage_data`），
+并且厂商的 `teecd`、指纹 TA、`fingerprint_daemon` 和 UOS 运行库已经拷到
+`/vendor/bin`、`/system/vendor/bin`、`/opt/uos-fp`（可从本机的麒麟里复制）。
+细节和验证方法见 [hardware/fingerprint.md](hardware/fingerprint.md)。
 
 WPS 和 QQ 要自己从官网下载 arm64 的 deb 安装，装好后再跑一次 `sudo /opt/l410/system/install.sh apps`。
 

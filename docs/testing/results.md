@@ -1,4 +1,9 @@
-# 最近一次回归结果（2026-10-01）
+# 最近一次回归结果（2026-10-01，历史记录）
+
+> **这份结果是 2026-10-01 的基线，不代表当前分支。** 当时的样机是 KLVU-WDU0B；
+> 当前远程机是 KLVU-WDU0（CS35L36 功放）。之后的睡眠、EC、tzdriver、指纹等
+> 都有大量改动，`quick.sh` 的 KNOWN 清单和模块数也变了。当前状态看
+> [known-issues.md](../known-issues.md) 和 `HANDOVER.md` 的 §0.10；下一次完整回归应重跑并替换本文。
 
 按 [测试计划](test-plan.md) 的集成回归层级做的一轮测试，样机只有一台。先在一个较早的内核构建上跑完整套，
 修掉发现的问题后，再在最终配置（scx_lavd 开机启用）上复测。
@@ -63,7 +68,7 @@
 | Spectre-v2 BHB 只显示部分缓解 | 大核（0xd40）不在内核的 BHB 列表里；`quick.sh` 记 WARN |
 | 没插网线时 RTL8168 停在 D0，不进 D3hot | `quick.sh` 记 WARN |
 | KVM 不可用 | 固件只给 EL1（`HYP mode not available`） |
-| 指纹不可用 | 传感器在 TEE（iTrustee）后面，6.18 没有 tzdriver |
+| 指纹不可用 | ~~传感器在 TEE（iTrustee）后面，6.18 没有 tzdriver~~ → 2026-10-23 已端到端可用（录入/识别/`fprintd`/`sudo`），见 [hardware/fingerprint.md](../hardware/fingerprint.md) |
 | lavd 下温控限频比 EAS 平缓 | 持续满载时温度会比 EAS 略高，之后被积分项压住。要和 EAS 一致，可以改成按空闲时间估算负载（cpufreq_cooling 的非 SMP 实现） |
 | lavd 下 Chromium 渲染主线程常在小核上 | bilibili 页面的渲染主线程 49% 到 59% 的时间在 A55 小核（EAS 下 70% 到 78% 在大核）。绑到大核后 CPU 时间从约 75% 降到约 45%，但滚动掉帧没有明显变化 |
 | lavd 下的电池续航 | 没测（要拔电源） |

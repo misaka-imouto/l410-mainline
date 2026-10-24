@@ -1,6 +1,6 @@
 # 华为擎云 L410 运行主线 Linux 6.18 + Debian
 
-华为擎云 L410（型号 KLVU-WDU0B，麒麟 990 + Mali-G76）出厂装的是麒麟 V10，内核是厂商的 4.19.71-kr990。
+华为擎云 L410（型号 KLVU-WDU0B / KLVU-WDU0，麒麟 990 + Mali-G76）出厂装的是麒麟 V10，内核是厂商的 4.19.71-kr990。
 这个仓库和配套的内核仓库让它跑 Linux 6.18 LTS 和 Debian（forky，KDE Plasma 6.7 Wayland），
 GPU 用开源的 Panfrost/Mesa，不再依赖厂商内核和闭源 libmali。
 
@@ -33,7 +33,7 @@ GPU 用开源的 Panfrost/Mesa，不再依赖厂商内核和闭源 libmali。
 
 需要：
 
-- 一台 L410（KLVU-WDU0B），保留出厂麒麟（GRUB、WiFi 固件都从它来）；
+- 一台 L410（KLVU-WDU0B 或 KLVU-WDU0），保留出厂麒麟（GRUB、WiFi 固件都从它来）；
 - UFS 上一个至少 32 GB 的空分区给 Debian（出厂分区表没有空闲空间，要先从 DATA 分区缩出来，见安装文档）；
 - 一台 x86-64 的 Debian/Ubuntu 电脑或 Windows 的 WSL 2，用来编内核和生成根文件系统；
 - U 盘或网络，把文件拷到 L410。
@@ -66,7 +66,7 @@ sudo bash l410-mainline/tests/quick.sh
 |---|---|
 | [boot/](boot/) | 装内核（`install-kernel.sh`）、在麒麟的 GRUB 里加启动项（`grub-entry.sh`） |
 | [rootfs/](rootfs/) | 生成根文件系统（`mkrootfs.sh`）、软件包清单、在 L410 上部署（`deploy.sh`）、要从麒麟拷的固件清单 |
-| [system/](system/) | Debian 的系统配置，`system/install.sh` 按阶段安装：基础、桌面、硬件、电源模式、调度器、内存、触控板、视频硬解、Mesa、启动速度、应用 |
+| [system/](system/) | Debian 的系统配置，`system/install.sh` 按阶段安装：基础、桌面、硬件、指纹、电源模式、调度器、内存、触控板、视频硬解、Mesa、启动速度、应用 |
 | [tests/](tests/) | 在 L410 上跑的测试：`quick.sh` 一分钟自检，各子系统测试，`bench/` 性能测量工具 |
 | [tools/](tools/) | 诊断信息收集 |
 | [docs/](docs/) | 安装、内核、硬件、调优、测试文档 |
@@ -77,7 +77,7 @@ sudo bash l410-mainline/tests/quick.sh
 - [docs/install.md](docs/install.md)：安装和升级
 - [docs/kernel.md](docs/kernel.md)：内核源码结构、构建、启动参数、出问题时怎么取日志
 - [docs/kernel-config.md](docs/kernel-config.md)：内核配置片段
-- [docs/hardware/](docs/hardware/)：SoC 时钟与核间通信、电源与温控、UFS、USB、PCIe、WiFi/蓝牙、音频、显示与 GPU、视频解码、笔记本外设、睡眠
+- [docs/hardware/](docs/hardware/)：SoC 时钟与核间通信、电源与温控、UFS、USB、PCIe、WiFi/蓝牙、音频、显示与 GPU、视频解码、笔记本外设、指纹、睡眠
 - [docs/puzzles-roadmap.md](docs/puzzles-roadmap.md)：硬件补完路线图（5 大硬件拼图规划与当前进展）
 - [docs/tuning/](docs/tuning/)：电源模式与性能、桌面帧延迟、sched_ext、内存、应用启动速度、触控板滚动、桌面
 - [docs/testing/](docs/testing/)：自检套件、测试计划、最近一次回归结果

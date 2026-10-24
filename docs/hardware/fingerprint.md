@@ -5,6 +5,12 @@
 
 在 Linux 6.18 主线内核中，我们通过引入 **iTrustee tzdriver** 安全客户端网关驱动与 **huawei-fingerprint** 平台驱动，完整打通了从内核设备节点、TrustZone 通信通道到用户态守护进程与桌面 PAM 生物认证的完整技术栈。
 
+> **当前状态（2026-10-23）**：整条栈已实机跑通——录入、识别、模板落盘、KDE 设置、
+> `fprintd` D-Bus 替身、`sudo` 指纹、KDE 锁屏解锁都验证过。未完成的只有：
+> 删除已录入模板（`l410-fp-del` 待实机确认 ABI）、SDDM 登录界面指纹。
+> 下文 §5~§6.19 是调试过程记录，里面的“阻塞/未做”只代表当时；
+> 当前结论看 §6.20 和 [known-issues.md](../known-issues.md)。
+
 ---
 
 ## 1. 硬件拓扑与引脚定义
@@ -43,9 +49,11 @@ fingerprint {
 |                                                                        |
 |  [ Desktop Login / PAM / Sudo ]                                        |
 |               |                                                        |
-|  [ deepin-authenticate / DBus: com.huawei.Fingerprint ]                |
-|               |                                                        |
-|     [ fingerprint_daemon ]                                             |
+|  [ pam_fprintd ] <-> [ l410-fprintd-shim: net.reactivated.Fprint ]    |
+|               |               (代理到 com.huawei.Fingerprint)             |
+|               +----------------+                                       |
+|                                |                                       |
+|     [ fingerprint_daemon ] <---+ (DBus: com.huawei.Fingerprint)        |
 |        /              \                                                |
 |   [ teecd ]       /dev/fingerprint                                     |
 |       |           (GPIO 199 RST 上电, GPIO 234 IRQ 触摸捕获)           |
@@ -130,12 +138,17 @@ SUBSYSTEM=="huawei_fp", MODE="0660", GROUP="input"
 2. **`hwfp_init.service`**：
    - 命令：`/usr/bin/fingerprint_daemon`
    - 监听 `/dev/fingerprint` 中断，在检测到按压事件后与 TA 通信进行生物特征比对，并在系统总线上注册 `com.huawei.Fingerprint` DBus 服务。
-3. **`deepin-authenticate.service` / Linux PAM**：
-   - 将桌面系统的密码输入界面与指纹识别自动联动。支持锁屏唤醒即轻触电源键瞬时解锁。
+3. **`l410-fprintd-shim` / Linux PAM**：
+   - 替身持有 `net.reactivated.Fprint`，把 `pam_fprintd` / KDE 设置 / `fprintd-*` 的请求代理到厂商的 `com.huawei.Fingerprint`。
+   - `sudo` 用 `/etc/pam.d/sudo` 的 `pam_fprintd`；KDE 锁屏用 plasma 自带的 `/usr/lib/pam.d/kde-fingerprint`。
+   - `deepin-authenticate` 不是必需的，装不装都不影响这条链路。
 
 ---
 
-## 5. 6.18 用户态现状与阻塞点（2026-10-22 实测）
+## 5. 6.18 用户态现状与阻塞点（2026-10-22 实测，历史）
+
+> 本节记录的是 2026-10-22 的状态；两个“硬阻塞”后来都已解决（见 §6）。
+> 现在请直接读 §6.20 和文首的当前状态。
 
 内核侧 `/dev/tc_ns_client`、`/dev/fingerprint` 和 TEE TA 加载都已就绪，但**指纹业务还没跑起来**，目前有两个硬阻塞：
 
@@ -1105,7 +1118,7 @@ sudo grep -a primary_indices_count /var/log/fp_kirin/fp_hal.log | tail -1
 考虑到旧模板本身无害（那根手指也能解锁），这件事排在锁屏/PAM 回归之后。
 
 
-## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试## 7. 验证与诊断测试
+## 7. 验证与诊断测试
 
 系统提供了开箱即用的测试诊断工具：
 
