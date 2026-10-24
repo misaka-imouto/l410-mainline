@@ -42,6 +42,7 @@
 #define LIBHW "libhwFingerprint.so"
 
 typedef int (*init_fn)(void *);
+typedef int (*support_fn)(void);
 typedef int (*get_num_fn)(const char *, int *);
 typedef int (*get_list_fn)(const char *, void *);
 typedef int (*delete_fn)(const char *, int *);
@@ -57,8 +58,9 @@ static void *sym(void *h, const char *name)
 
 int main(int argc, char **argv)
 {
-	void *h;
+	void *h, *ca;
 	init_fn init;
+	support_fn support;
 	get_num_fn get_num;
 	get_list_fn get_list;
 	delete_fn del;
@@ -86,6 +88,19 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
+	/*
+	 * libhwFingerprint.so has no DT_NEEDED on the CA library (only libc,
+	 * libdbus, libdl, libpthread): it expects the vendor daemon, which links
+	 * both, to have put the fpc_* symbols in the global namespace.  Load the
+	 * CA library globally first or dlopen() fails on e.g. fpc_clear_pov_image.
+	 */
+	ca = dlopen("libfingerprint.so", RTLD_NOW | RTLD_GLOBAL);
+	if (!ca) {
+		fprintf(stderr, "cannot dlopen libfingerprint.so: %s\n", dlerror());
+		fprintf(stderr, "hint: LD_LIBRARY_PATH=/opt/uos-fp/lib\n");
+		return 1;
+	}
+
 	h = dlopen(LIBHW, RTLD_NOW);
 	if (!h) {
 		fprintf(stderr, "cannot dlopen %s: %s\n", LIBHW, dlerror());
@@ -94,6 +109,7 @@ int main(int argc, char **argv)
 	}
 
 	init = (init_fn)sym(h, "CommonInitFingerprint");
+	support = (support_fn)sym(h, "CommonIsSupportFingerprint");
 	get_num = (get_num_fn)sym(h, "CommonDriverGetFpNum");
 	get_list = (get_list_fn)sym(h, "CommonDriverGetFpList");
 	del = (delete_fn)sym(h, "CommonDriverDeleteFp");
@@ -111,6 +127,17 @@ int main(int argc, char **argv)
 
 	ret = init(init_buf);
 	printf("CommonInitFingerprint -> %d\n", ret);
+
+	/*
+	 * CommonDriver* work on the driver ops table that
+	 * CommonIsSupportFingerprint() publishes.  The daemon reaches it through
+	 * CommonDriverInit(), which then also resets the MCU; the table itself
+	 * is static, so publishing it is enough for the read-only path.
+	 */
+	if (support) {
+		ret = support();
+		printf("CommonIsSupportFingerprint -> %d\n", ret);
+	}
 
 	ret = get_num(account, &num);
 	printf("CommonDriverGetFpNum(%s) -> %d, num=%d\n", account, ret, num);
