@@ -1075,28 +1075,45 @@ fp_enroll_result_handle completed`，模板库 70848 → 86208 字节。
   本地控制台/锁屏做，SSH 里测不出来（会直接走密码）
 
 
-#### 6.20.3 删指纹的工具（已写好、待实机验证）
+#### 6.20.3 删指纹的工具（ABI 已打通，删除路径被 D-Bus 卡住，2026-10-24 更新）
 
 `system/fingerprint/bin/l410-fp-del.c`（已交叉编译并装到远程
 `/usr/local/sbin/l410-fp-del`）：用 `dlopen("libhwFingerprint.so")` 调厂商 HAL 的
 `CommonInitFingerprint` / `CommonDriverGetFpNum` / `CommonDriverGetFpList` /
 `CommonDriverDeleteFp`，也就是 UOS 控制中心通过 Android HAL 走的那条删除路径
-（最终发给 TA 的是 `fpc_tac_send_delete_fingerprint_set`）。入口函数的原型是从符号
-和反汇编推的，不是华为头文件，所以：
+（最终发给 TA 的是 `fpc_tac_send_delete_fingerprint_set`）。
 
-- `--list` 是只读的，可以先跑它确认 ABI 猜对了
-- `--delete <id>` 会真的发 TA 删除命令，**参数猜错可能把整个模板库清空**，必须
-  在机主在场时做，并先备份 `/data/sec_storage_data`
-- 跑之前要 `systemctl stop hwfp_init` 让出 TA 会话（teecd 保持运行，TA 需要它的
-  fs agent 做 SFS）
+**2026-10-24 实测（`bbebe6b`）**：
+
+- `libhwFingerprint.so` 的 `DT_NEEDED` 里**没有** `libfingerprint.so`（只有 libc、
+  libdbus、libdl、libpthread）——`fpc_*` 符号本来是靠 daemon 可执行文件链接后在全局
+  作用域里提供的。所以必须先 `dlopen("libfingerprint.so", RTLD_NOW|RTLD_GLOBAL)`，
+  否则会报 `undefined symbol: fpc_clear_pov_image`。
+- `CommonInitFingerprint()` 只做 D-Bus 握手；`CommonDriver*` 用的是
+  `CommonIsSupportFingerprint()` 发布的那张 ops 表（`global+3808`），所以必须先调它，
+  否则 `CommonDriverGetFpNum` 直接返回 -1。
+- 停掉 `hwfp_init` 后：两个函数都返回 0，但 `GetFpNum` 的 `num` 是 **0**，而 daemon
+  自己的日志里 `primary_indices_count = 2` —— 模板计数是**运行中的 daemon**（D-Bus）
+  给的，不是直接从 TA 读的。
+- 反过来，daemon 开着的时候工具会**卡在 `CommonInitFingerprint()` 的 D-Bus 调用里**
+  （30 s timeout 也回不来）。
+
+所以“停 daemon → 自己拿 TA → 删模板”这条路走不通；要继续就得做成“在 daemon 的
+D-Bus 会话里间接调用 HAL”（例如另写一个跑在同一 session 里的 shim），这件事**必须先
+有更完整的 HAL 逆向**，而且删除本身要机主在场、先备份 `/data/sec_storage_data`。
+模板数仍然可以用 daemon 日志确认（不需要触摸、也不需要停服务）：
+
+```sh
+sudo grep -a primary_indices_count /var/log/fp_kirin/fp_hal.log | tail -1
+```
+
+旧版流程（保留作参考，但现在已经知道拿不到模板计数）：
 
 ```sh
 sudo systemctl stop hwfp_init
 sudo LD_LIBRARY_PATH=/opt/uos-fp/lib /usr/local/sbin/l410-fp-del --account zhtsg --list
 sudo LD_LIBRARY_PATH=/opt/uos-fp/lib /usr/local/sbin/l410-fp-del --account zhtsg --delete 0
 sudo systemctl start hwfp_init
-# 验证（不需要触摸）：模板条数应减 1
-sudo grep -a primary_indices_count /var/log/fp_kirin/fp_hal.log | tail -1
 ```
 
 
@@ -1282,6 +1299,31 @@ sudo tail -20 /var/log/fp_kirin/fp_hal.log             # 期待 check_irq_status
 sudo cat /sys/devices/platform/fingerprint/irq_count   # 触摸一次应 +1
 ```
 
+
+### 6.24 sysfs 面与厂商驱动对齐（`ccfc896ce`）
+
+厂商 daemon 在每次 `fpc_module_open()` 里把从 TA 读到的模组 ID 写回
+`/sys/devices/platform/fingerprint/module_id`（UOS 上这个节点是 `rw-rw----`）。我们原来
+用的是 `DEVICE_ATTR_RO`（0444），所以 6.18 的 HAL 日志里每次启动都有：
+
+```
+sysfs_node_write openat failed 13
+sysfs_node_write failed -5
+fpc_module_open module_id_node_write failed -5
+```
+
+现在 `module_id` 可写并记住写入值（`module_id_store`），读回来就是真实模组 ID：
+`23100501TC38A1109051209P35332473138312E002A7176A40E04F606`。对功能没有影响（HAL
+只是忽略错误继续），但消除了日志噪声，也让 `module_id` 不再是硬编码的默认值。
+
+厂商 sysfs 面剩下的差异（都不影响已验路径，想完全对齐时再补）：
+
+| 节点 | 厂商 | 我们 |
+|---|---|---|
+| `module_id_ud` / `ud_fingerprint_chip_info` | 有 | 无（daemon 不读） |
+| `test_power_en` | 读返回 `-EIO` | 回 `1` |
+| `irq` / `irq_enabled` | `0600` | `0444` / `0644` |
+| `irq_count` | 无 | 新增，调试用 |
 
 ## 7. 验证与诊断测试
 
