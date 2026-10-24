@@ -1,6 +1,6 @@
 # 已知问题
 
-截至 2026-10-23，内核 6.18.54-l410（分支在 tag `.2` 之后 62 个提交，`.3` 尚未打 tag），Debian forky（Plasma 6.7.4，Mesa 26.1.6）。
+截至 2026-10-24，内核 6.18.54-l410（tag `v6.18.54-l410.3`），Debian forky（Plasma 6.7.4，Mesa 26.1.6）。
 
 ## 没做的硬件
 
@@ -16,7 +16,7 @@
 
 ## 已知缺陷
 
-- ~~tzdriver 的 `ipihelper` 内核线程永久 D 态~~（分支已修，将随 `v6.18.54-l410.3`；当前 tag 仍是 `.2`）：`kthread_create_worker()`
+- ~~tzdriver 的 `ipihelper` 内核线程永久 D 态~~（`v6.18.54-l410.3` 起已修）：`kthread_create_worker()`
   之后用 `tz_kthread_bind_mask()` 绑定未启动的线程，`kthread_bind_mask()` 内部
   `wait_task_inactive(TASK_UNINTERRUPTIBLE)` 会把它留在无唤醒的睡眠里（`siqthread` 之所以正常
   是因为绑定后紧跟一句 `wake_up_process()`，`ipihelper` 漏了）。症状：每 ~2 分钟一条 hung task
@@ -27,7 +27,7 @@
 - 看门狗（v6.18.54-l410.1 已修）：固件在进内核前已经启动 AP 看门狗 WDT0（SP805，0xfe026000），交给内核时约剩 60 s，中断经 BL31 转成 FIQ。
   v6.18.54-l410 带 `l410_deadman=0` 启动会在开机约 60 s 时 panic（"FIQ taken without a root FIQ handler"）。v6.18.54-l410.1 的内核开机就接管并停掉它。
   为了让旧版内核也能用，`boot/install-kernel.sh` 仍会去掉 `l410_deadman=0`，`system/hardware/l410-watchdog-off.service` 开机后再停一次，对新内核没有影响。
-- 睡眠：s2idle 正常（默认）。`.2` 之后的提交（将随 `v6.18.54-l410.3`）里 `smc_svc_thread` 也能被冻结，
+- 睡眠：s2idle 正常（默认）。`.3` 起 `smc_svc_thread` 也能被冻结，
   挂起真正完成（以前每次都在 "Freezing remaining freezable tasks failed" 卡 20 秒后放弃）。
   副作用：**空闲的机器现在真的会睡下去**，而 s2idle 没有 WoWLAN，唤醒源只有电源键/上盖/RTC，
   远程 SSH（frp）会直接消失 —— 测试机上先跑 `dev/testrig-nosleep.sh`。键盘唤醒与开盖唤醒已通过 `09-laptop.dtsi` 设备树修补补充 `wakeup-source;` 属性彻底解决（拼图 0），实测按键/开盖即醒。

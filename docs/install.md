@@ -68,9 +68,8 @@ linux-l410/l410/build.sh -o l410-build
 | `boot.cfg` | GRUB 片段：内核命令行，`@ROOT_UUID@` 在安装时换成真实值 |
 
 不想自己编，可以下载内核发布页的
-[l410-kernel-6.18.54-l410.2.tar.gz](https://github.com/liuwang97/linux-l410/releases/tag/v6.18.54-l410.2)，解开就是同样的 `bundle/`。
-注意：发布页目前最新仍是 `.2`；分支上 `.2` 之后的 tzdriver/指纹、EC 和日志降级修复尚未打 `.3` tag，
-要用这些改动得自己编（或等 `.3` 发布）。
+[l410-kernel-6.18.54-l410.3.tar.gz](https://github.com/liuwang97/linux-l410/releases/tag/v6.18.54-l410.3)，解开就是同样的 `bundle/`。
+（如果发布页还没更新，用 `v6.18.54-l410.3` tag 自己编：`linux-l410/l410/build.sh -o l410-build`。）
 内核构建的细节见 [kernel.md](kernel.md)。
 
 ## 3. PC 上生成根文件系统

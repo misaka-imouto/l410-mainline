@@ -1,4 +1,23 @@
-# 最近一次回归结果（2026-10-01，历史记录）
+# 回归结果
+
+## 2026-10-24：`v6.18.54-l410.3` 出包前的最小回归（当前）
+
+> 这一轮只跑了 `quick.sh` 全量 + 指纹真手指回归 + `laptop.sh`，**没有**重跑回
+> mem/perf/烤机这些长时间套件；下面 2026-10-01 那份仍是最后一次完整回归，仅作参照。
+
+| 项 | 结果 | 说明 |
+|---|---|---|
+| `quick.sh`（profile=dev） | **196 PASS / 0 FAIL**（xfail 1，warn 3，skip 5，info 27） | 耗时 58 s；warn 是 Spectre-BHB 列表、深度空闲次数、没有网线的 RTL8168 |
+| 指纹：真手指 identify | PASS | `fpc_tac_check_irq_status retval: 0`、`wait_finger_down, took 803 ms`、`Identify took 9 ms (result: 2 score: 80 index: 1 coverage: 100 quality: 85)` + 模板更新 |
+| 指纹：KDE 锁屏解锁 | PASS | `net.reactivated.Fprint` 替身抓到同一次触摸，`identify result=0 (right-middle-finger)` → `unlock-session 14/2/1` |
+| 指纹：空闲不再自激 | PASS | 一次 identify 只武装一次（`irq_count` +1），之后 HAL 阻塞在 `poll()`，30 s 内 IRQ 不增长 |
+| `tests/laptop.sh` | 43 PASS / 6 FAIL | 失败项全是板型参考值：这台是 KLVU-WDU0（触控板不是 `27C6:01E0`、电池满充 7956 mAh/5 循环 vs WDU0B 的 7230 mAh/51 循环）；另外跑它的静音灯测试时 EC 正忙，三次重试全失败（`-EIO`，见 `1781aa259`） |
+| RTC | PASS（修了环境） | 发现 `/etc/adjtime` 写着 `LOCAL` 但 RTC 按 UTC 跑，`pmic.rtc` 差 28799 s；`timedatectl set-local-rtc 0` 后 PASS |
+
+环境：HUAWEI L410 KLVU-WDU0（CS35L36 功放）、麒麟 990、内核 `v6.18.54-l410.3`、Debian testing（Plasma 6.x）、
+测试机上的 `bundle/` 与发布 tarball 的 `Image`/`l410.dtb`/`huawei_fingerprint.ko` md5 逐字节相同。
+
+## 2026-10-01：完整回归基线（历史记录）
 
 > **这份结果是 2026-10-01 的基线，不代表当前分支。** 当时的样机是 KLVU-WDU0B；
 > 当前远程机是 KLVU-WDU0（CS35L36 功放）。之后的睡眠、EC、tzdriver、指纹等
