@@ -1181,7 +1181,24 @@ TEE 日志显示 TA 每 20ms `init_finger_detect → SwitchToFdtDown → 立刻�
 **UOS 侧数据是好的**：同一套模板在 UOS `Identify` 得到
 `result: 0 score: 10000 index: 1 coverage: 100 quality: 84`。
 
-**下一步**：在 UOS 上 strace 成功路径的 enable/poll/disable 时序与 6.18 对比；补
+**定量对照（2026-10-24 晚）**：
+
+| 指标 | UOS 4.19 | 6.18 |
+|---|---|---|
+| 一整轮 identify 的 `TA_fp_tee_init_finger_detect` | 4 次 | 每 ~20ms 一次 |
+| 触摸前 34 秒内的 TA 日志 | 0 行 | 几百行 |
+| 10 秒内 `fpc_tac_finger_detect` | — | 468 次，与 IRQ 增量完全相等 |
+| `fpc_tac_check_irq_status` | 0（触按时） | 恒 6 |
+
+即 6.18 上**每次武装 FDT 都会换来恰好一个 IRQ**，HAL 的 poll 立刻返回 → 查 TA 无手指
+→ 再武装，自激循环；UOS 上武装后传感器不再发中断，直到真有手指。问题不在 HAL 的
+循环（它对"中断但不是手指"本来就是这么重试的），而在"为什么每次武装都产生一个中断"。
+
+另外 UOS 的 TA 日志里有一行 6.18 从未出现的：
+`_IoHubExec is fdt cmd , must wait for intr after don't free cmd` —— 说明 UOS 上这条
+SPI 命令会保持挂起等中断。
+
+**下一步**：补
 `0x6003` 双边沿分支与 `fingerprint,irq_custom_scheme` 等 DT 属性；确认传感器的
 IRQ 线在 FDT 模式下的电平语义（现在 `gpio-2 ... in lo`，武装后风暴说明它被拉高）。
 
