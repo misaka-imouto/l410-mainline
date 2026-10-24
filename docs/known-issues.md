@@ -12,7 +12,7 @@
 | Vulkan | **已完成（拼图 3）**：Mesa 开源 `panvk` 已支持 Mali-G76 (Bifrost v7) Vulkan 1.3 硬件加速 |
 | 风扇转速 | 风扇完全由 EC 根据板上热敏电阻控制，厂商系统里也没有驱动，读不到转速 |
 | KVM | 固件只给 EL1，没有 EL2，不能用虚拟化 |
-| USB OTG、Type-C PD、充电器类型识别 | 暂未实现 |
+| USB OTG、Type-C PD、充电器类型识别 | 暂未实现，厂商在 L410 上也没有：`pddevice` 只做 TCA 换道（probe 时伪造“DP 插入、正插”），`hisi_usb_typec`/`hisi_tcpc` 都是 disabled，PD 契约和充电在 EC 侧。EC 的两个信息寄存器（`0x0280`/`0x0451`）已逐字段只读扫过，没有充电器类型或 PD 档位。充电本身正常。见 [hardware/usb.md](hardware/usb.md)、[hardware/laptop.md](hardware/laptop.md) |
 
 ## 已知缺陷
 

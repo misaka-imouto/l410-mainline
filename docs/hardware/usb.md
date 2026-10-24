@@ -114,13 +114,45 @@ RTL8153 回到 5000M、PHY init 计数加 1。
 lsusb -t
 dmesg | grep -iE "kirin990|dwc3|xhci"
 cat /sys/kernel/debug/clk/clk_summary | grep -i usb     # 需要 root
+sudo cat /sys/kernel/debug/kirin990-usb3/tca            # TCA / Type-C 状态，见下
 ```
+
+### Type-C（TCA/TCPC）状态
+
+厂商的 `combophy.c` 根本不问 TCA 插了什么：`init-mode = "usb_dp"` 时直接伪造
+“DP 插入、正插”事件，然后只换道。所以 6.18 也不读回 TCPC，但寄存器是可读的，
+`phy-kirin990-usb3` 为此提供了只读的 debugfs 文件：
+
+```
+sudo cat /sys/kernel/debug/kirin990-usb3/tca
+misc_a0    0x00000106
+tca_sts    0x00003e00 ack=0 timeout=0
+tca_tcpc   0x00000003 valid=0 mux=3 flip=0 low_power=0
+tca_pstate 0x0033bb22
+tca_cfg1   0x000124f8
+tca_dbg0   0x00003000
+dp_cfg6    0x7c800082 sram_bypass=0 ext_ld_done=1
+dp_stat0   0x00000006 sram_init_done=1
+tca_window 200=00000600 ... 214=00000003 218=00000003 ... 230=0033bb22 ...
+```
+
+（2026-10-24 在 AC 在位、电池满、USB3 hub 链路上的读数。）几点要知道的：
+
+- `TCA_TCPC` 的 `valid` 位在换道握手完成后会自己清掉，剩下 `mux = 3`（USB3.1 + DP 2 lane）才是稳态。
+- `flip` 就是 `TCA_TCPC` bit2，正向插入时为 0；但没人设它，所以它恒等于我们写进去的 `p->flip`。
+- `TCA_INTR_STS` 的 bit0/bit1 是换道握手的 ACK/TIMEOUT，上面读到的 `0x3e00`（bit9-13）没有任何驱动去处理，
+  含义未知，不影响功能。
+- `tca_window` 里 `0x210`、`0x218`、`0x22c`、`0x234` 在稳态下也是非零值，同样没有文档。
+- 读这些寄存器不会挂：控制器在跑的时候整块是上电、有时钟的。**不要**在 PHY 没有 init 的时候读
+  `USB_DP_CTRL`（见上面 SError 那一节）。
 
 移植初期 UFS 根分区还挂不上时，`dev/bringup/usb-initramfs/` 给诊断 initramfs 加了 USB 网卡 DHCP 和一个小 HTTP 服务，可以从 PC 验证整条链路。
 
 ## 没做的
 
 - OTG / gadget、BC1.2 充电检测、Type-C PD（`hisilicon,pd`、fusb、tusb 那些）、HiFi USB（音频子系统共用 USB2 PHY）、DP4 独占模式。
+  厂商在 L410 上也没做 PD 协商：`pddevice` 只换道，充电和 PD 契约在 EC 侧，
+  `hisi_usb_typec` / `hisi_tcpc` 节点是 disabled 的，内核里没有任何充电器类型可上报（见 [laptop.md](laptop.md)）。
 - 系统睡眠时 PHY 的 suspend/resume。s2idle 下不需要，deep 睡眠本身还不能用。
 - DP 输出：TCA 固定在 USB3.1 + DP 2 lane、正插；DP 那两条 lane 的 HPD 和切换要等 DP/HDMI 驱动（见 [graphics.md](graphics.md)）。
   如果 DP 要用别的 mux 模式（DP4），切换时 USB 必须先断开，要和这个 PHY 驱动协调。
