@@ -1157,24 +1157,38 @@ TA 的 `fp_init_sensor` 用 `FP_IOC_CMD_GET_DEVICE_INFO` 拿到的引脚号去�
 `func_init_sensor: module_info: 23100501TC38A1109051209P...`（真实模组 ID），
 `finger_detect` 恢复 0，IRQ 开始计数。
 
-### 6.22 中断链路：`ENABLE_IRQ` 要返回 1，`irq` 属性要锁存（`d68b83c2d`）
+### 6.22 中断握手：enable 要返回 1、irq 属性要锁存、probe 后先关中断
 
-继续 strace `fingerprint_daemon` 发现 HAL 的 `fpc_ree_device_wait_irq()`：
+对照 strace 出来的 HAL 行为（`fpc_ree_device_wait_irq()` 是
+`ioctl(0x6601 ENABLE_IRQ)` → `ppoll(200ms)` → `ioctl(0x6602 DISABLE_IRQ)` →
+TA `check_irq_status`）逐项对齐厂商驱动：
 
-- 每轮 `ioctl(0x6601 ENABLE_IRQ)` → `ppoll(fd, 200ms)` → `ioctl(0x6602 DISABLE_IRQ)`
-  → TA `check_irq_status`；
-- 厂商驱动的 `fp_ioc_enable_irq` **成功时 `return 1`**，我们的桩返回 0，HAL 于是
-  认为"中断没武装"，每 ~20ms 重来一次，永远走不到 `check_irq_status`。
-- 传感器只**脉冲** IRQ 线（`gpio-2 ... in lo`），而 HAL 轮询 `irq` 这个 sysfs
-  属性 → 驱动要在 handler 里锁存、读时清除，并 OR 上实时电平。
+| 项 | 厂商驱动 | 我们（修前） | 现在 |
+|---|---|---|---|
+| `ENABLE_IRQ` 返回值 | **1**（`mov w0,#1` 后 ret） | 0 → HAL 认为没武装，20ms 重来 | 1 |
+| `irq` sysfs 属性 | 读后清（传感器只脉冲） | 实时电平，几乎总是 0 | 锁存 + 读后清，OR 实时电平 |
+| probe 后的中断状态 | `irq_enabled=0`（空闲计数不涨） | 一直使能 → IRQ 风暴数万次/分钟 | `disable_irq`，`irq_enabled=0` |
+| 中断 flags | `IRQF_ONESHOT\|IRQF_EARLY_RESUME\|TRIGGER_RISING`(0x6001)；`dev->@808==1` 时双边沿(0x6003) | `TRIGGER_RISING\|ONESHOT` | 同（未做 0x6003 分支） |
 
-**仍差一环**：NS 侧 GPIO 中断在响，但 TA 的 `fpc_tac_check_irq_status` 返回 **6**
-（正常应是 **0**），即 TA 没通过它自己的通道看到 finger-down。下一步在 UOS 上做
-同样的 strace + TA 日志对比。
+修完后空闲状态与 UOS 完全一致（`irq_enabled=0`、计数 0），等待期间 daemon 正常
+`enable→poll→disable` 翻转（实测 0/1 交替）。
 
-**调试注意**：别用脚本轮询 `/sys/bus/platform/devices/fingerprint/irq`，它现在是
-读后清锁存，轮询会把事件从 daemon 那里抢走。
+**仍差一环**：`fpc_tac_check_irq_status` 在 6.18 恒为 **6**，UOS 触按时为 **0**。
+TEE 日志显示 TA 每 20ms `init_finger_detect → SwitchToFdtDown → 立刻收到 cmd 0xb0
+→ check_irq_status=6`：等待期间中断线仍在风暴，HAL 的 poll 立刻"成功"，FDT 被反复
+重新武装，手指事件来不及锁存。
 
+**UOS 侧数据是好的**：同一套模板在 UOS `Identify` 得到
+`result: 0 score: 10000 index: 1 coverage: 100 quality: 84`。
+
+**下一步**：在 UOS 上 strace 成功路径的 enable/poll/disable 时序与 6.18 对比；补
+`0x6003` 双边沿分支与 `fingerprint,irq_custom_scheme` 等 DT 属性；确认传感器的
+IRQ 线在 FDT 模式下的电平语义（现在 `gpio-2 ... in lo`，武装后风暴说明它被拉高）。
+
+**调试备忘**：`/dev/teelog` 是二进制环缓冲（`cat /dev/teelog | tr -c '[:print:]\n'
+'\n' | grep -aE '.{8,}'`，先 `cat /dev/teelog >/dev/null` 清空）；别用脚本轮询
+`/sys/.../fingerprint/irq`（读后清锁存，会把事件从 daemon 手里抢走）；UOS 的 daemon
+日志在 `/data/var/log/fp_kirin/`。
 
 ## 7. 验证与诊断测试
 
