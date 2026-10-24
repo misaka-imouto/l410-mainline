@@ -314,15 +314,15 @@
 | ID | 项目 | 通过条件 | 类 | 级 | 脚本 |
 |---|---|---|---|---|---|
 | BAT-01 | 读数 | power_supply 读数与麒麟一致 | A | P0 | quick、laptop |
-| BAT-02 | 充电 | 从低电量充到满：Charging、电流为正、电量上升；满后 Full、电流趋零；时长与基线相当 | S | P0 | |
-| BAT-03 | 放电 | 拔 AC：Discharging、电流为负；UPower 剩余时间合理 | S | P0 | quick（状态一致性） |
+| BAT-02 | 充电 | 从低电量充到满：Charging、电流为正、电量上升；满后 Full、电流趋零；时长与基线相当 | S | P0 | `tools/l410-charge-trace` |
+| BAT-03 | 放电 | 拔 AC：Discharging、电流为负；UPower 剩余时间合理 | S | P0 | quick（状态一致性）、`tools/l410-charge-trace` |
 | BAT-04 | AC 插拔 | 继电器插拔 100 次，每次 1 s 内有 uevent，UPower 与 PowerDevil 切档正确 | S | P0 | quick（UPower 一致） |
 | BAT-05 | 低电量链路 | 放电到底：10% 提醒、自动切省电、临界电量有序关机或休眠，都在 EC 硬断电之前完成；下次开机没有 fsck 错误 | S | P0 | |
 | BAT-06 | 电量精度 | EC 百分比与电流积分误差 ≤ 5%，电量不跳变 | S | P1 | |
 | BAT-07 | 适配器兼容 | 原装、第三方 PD 45/65/100 W、PD 扩展坞、5 V 慢充：能充的都能充，状态正确，慢充有提示 | L | P1 | |
 | BAT-08 | 电池健康 | 循环次数、满充/设计容量、温度可读，纳入诊断包 | A | P1 | quick |
 | BAT-09 | EC 长稳 | 72 h 轮询 0 PEC 错、0 超时；挂起恢复后状态同步 GPIO 正确 | A | P0 | quick、laptop、soak-mix |
-| BAT-10 | 关机与挂起下充电 | 能充电，充电指示灯正常 | S | P1 | |
+| BAT-10 | 关机与挂起下充电 | 能充电，充电指示灯正常 | S | P1 | `tools/l410-charge-trace` |
 | BAT-11 | 电池故障位 | EC 故障位、过热位到 power_supply health 的映射正确（不能注入时用代码审查加模拟读数） | A | P2 | |
 | BAT-12 | 深度放电 | 放空后放置再充电能开机；RTC 丢失后时间自动同步 | L | P2 | |
 | BAT-13 | 不写 EC 充电参数 | 驱动与 debugfs 不改 EC 的充电和保护参数 | A | P1 | |

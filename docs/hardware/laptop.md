@@ -199,6 +199,18 @@ sudo evtest                                            # 选 huawei-keyboard，�
 sudo evtest --query /dev/input/eventN EV_SW SW_LID     # N 换成合盖设备；开着返回 0，合着返回 10
 ```
 
+插拔一次电源、量充电速率、看 EC `0x81`/`0x82` 里那两个还没确认含义的位，用 `tools/l410-charge-trace`（root，只读）：
+
+```sh
+# 测试机上已经装在 /usr/local/sbin（这里写仓库里的路径）
+sudo tools/l410-charge-trace -d 180     # 每秒一行，输出 /var/tmp/l410-charge-trace-*.log
+```
+
+录的时候拔一次、插一次（AC 在线时先拔）。AC / 电池状态 / 电流方向 / `0x81` / `0x82` 一变就打一行 `EVENT`，
+结束时重放这些事件并给出 EC 传输计数的增量（该增量里出现 errors/status_errors 就是有问题）。
+每行的列定义在文件头；`battery_W` 是电池端 `current_now × voltage_now`，充放电都取绝对值。
+一行大约 1.2 秒（读 EC 本身要 0.2 秒），所以 180 秒能录到约 150 行；测过的 120 秒满载轮询共 1834 次 EC 传输、0 错误。
+
 `tests/laptop.sh`（root，只用 POSIX sh 和 busybox 工具，所以也能放进 initramfs 跑）：HID 设备绑到正确驱动，报告描述符的 md5 和厂商内核一致；键盘、Wireless Radio、触控板、合盖各 input 设备都在；热键的扫描码映射（EVIOCGKEYCODE 读 0x700a5-0x700ad）；EC 绑定、debugfs 无错误；电池各项在合理范围并和厂商内核的读数比对；AC 在线；60 s 连续轮询 EC 无错误；静音灯开关 EC 接受；合盖和状态同步 GPIO 的状态；dmesg 无相关报错。它无人值守，只查枚举、映射和当前状态，不能代替真的按键、合盖。
 
 `tests/quick.sh --only input,ec` 还查电池健康度（满充/设计 ≥ 80%）、AC 状态与电流方向是否一致、电池温区和 power_supply 温度、UPower 百分比。
